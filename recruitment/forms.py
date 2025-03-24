@@ -60,6 +60,7 @@ from recruitment.models import (
     StageFiles,
     StageNote,
     SurveyTemplate,
+    validate_pdf,
 )
 
 logger = logging.getLogger(__name__)
@@ -452,85 +453,108 @@ class CandidateCreationForm(ModelForm):
         return super().clean()
 
 
+
 class ApplicationForm(RegistrationForm):
     """
-    Form for create Candidate
+    Form for create Candidate through application process
     """
-
     load = forms.CharField(widget=widgets.RecruitmentAjaxWidget, required=False)
     active_recruitment = Recruitment.objects.filter(
         is_active=True, closed=False, is_published=True
     )
-    recruitment_id = forms.ModelChoiceField(queryset=active_recruitment)
+    recruitment_id = forms.ModelChoiceField(
+        queryset=active_recruitment,
+        widget=forms.Select(attrs={"data-widget": "ajax-widget"})
+    )
+    resume = forms.FileField(
+        required=False,
+        validators=[validate_pdf],
+        help_text=_("Upload PDF file only"),
+        widget=forms.FileInput(attrs={"accept": ".pdf"})
+    )
 
     class Meta:
         """
         Meta class to add the additional info
         """
-
         model = Candidate
-        exclude = (
-            "stage_id",
-            "schedule_date",
-            "referral",
-            "start_onboard",
-            "hired",
-            "is_active",
-            "canceled",
-            "joining_date",
-            "sequence",
-            "offerletter_status",
-            "source",
-        )
+        fields = [
+            'name',
+            'email',
+            'mobile',
+            'profile',
+            'gender',
+            'address',
+            'country',
+            'state',
+            'city',
+            'zip',
+            'dob',
+            'recruitment_id',
+        ]
         widgets = {
-            "recruitment_id": forms.TextInput(
-                attrs={
-                    "required": "required",
-                }
-            ),
-            "dob": forms.DateInput(
-                attrs={
-                    "type": "date",
-                }
-            ),
+            'dob': forms.DateInput(attrs={'type': 'date'}),
+            'profile': forms.FileInput(attrs={'accept': '.jpg, .jpeg, .png'}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = getattr(_thread_locals, "request", None)
-        self.fields["profile"].widget.attrs["accept"] = ".jpg, .jpeg, .png"
-        self.fields["profile"].required = False
-        self.fields["resume"].widget.attrs["accept"] = ".pdf"
-        self.fields["resume"].required = False
+        
+        # Configure profile field
+        self.fields['profile'].required = False
+        
+        # Set initial recruitment if provided in GET parameters
+        if request and request.GET.get('recruitmentId'):
+            try:
+                recruitment = Recruitment.objects.get(
+                    id=request.GET.get('recruitmentId'),
+                    is_active=True,
+                    closed=False,
+                    is_published=True
+                )
+                self.fields['recruitment_id'].initial = recruitment
+            except Recruitment.DoesNotExist:
+                pass
 
-        self.fields["recruitment_id"].widget.attrs = {"data-widget": "ajax-widget"}
-        self.fields["job_position_id"].widget.attrs = {"data-widget": "ajax-widget"}
-        if request and request.user.has_perm("recruitment.add_candidate"):
-            self.fields["profile"].required = False
-
-    def clean(self, *args, **kwargs):
-        name = self.cleaned_data["name"]
-        request = getattr(_thread_locals, "request", None)
-
+    def clean(self):
+        cleaned_data = super().clean()
+        profile = cleaned_data.get('profile')
+        resume = cleaned_data.get('resume')
+        recruitment = cleaned_data.get('recruitment_id')
+        
         errors = {}
-        profile = self.cleaned_data["profile"]
-        resume = self.cleaned_data["resume"]
-        recruitment: Recruitment = self.cleaned_data["recruitment_id"]
-        if not resume and not recruitment.optional_resume:
-            errors["resume"] = _("This field is required")
-        if not profile and not recruitment.optional_profile_image:
-            errors["profile"] = _("This field is required")
+        
+        if not recruitment:
+            errors['recruitment_id'] = _("Recruitment is required")
+            
+        if recruitment:
+            if not resume and not recruitment.optional_resume:
+                errors['resume'] = _("This field is required")
+                
+            if not profile and not recruitment.optional_profile_image:
+                errors['profile'] = _("This field is required")
+                
         if errors:
             raise ValidationError(errors)
-        if (
-            not profile
-            and request
-            and request.user.has_perm("recruitment.add_candidate")
-        ):
-            profile_pic_url = f"https://ui-avatars.com/api/?name={name}"
-            self.cleaned_data["profile"] = profile_pic_url
-        super().clean()
-        return self.cleaned_data
+            
+        return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        if commit:
+            instance.save()
+            
+            # Handle resume upload
+            if self.cleaned_data.get('resume'):
+                Resume.objects.create(
+                    file=self.cleaned_data['resume'],
+                    recruitment_id=instance.recruitment_id,
+                    is_candidate=True
+                )
+                
+        return instance
+
 
 
 class RecruitmentDropDownForm(DropDownForm):
