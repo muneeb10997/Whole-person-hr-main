@@ -1,0 +1,489 @@
+{% extends 'index.html' %}
+{% block content %}
+{% load static %}
+{% load i18n %}
+{% load basefilters %}
+{% load recruitmentfilters horillafilters %}
+
+<script src="{%static 'candidate/ranking_filter.js' %}"></script>
+
+<style>
+    /* Table Styling */
+    .table-responsive {
+        overflow-x: auto;
+        min-height: 600px;
+        width: 100%;
+    }
+
+    .table {
+        width: 100%;
+        min-width: 1200px; /* Minimum width to prevent squishing */
+    }
+
+    .table th {
+        white-space: nowrap;
+        padding: 1rem;
+        background-color: #f8f9fa;
+    }
+
+    .table td {
+        padding: 1rem;
+        vertical-align: middle;
+    }
+
+    /* Quiz Score Icon */
+    .quiz-score-icon {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px;
+        cursor: pointer;
+    }
+
+    .quiz-score-icon i {
+        margin-right: 5px;
+    }
+
+    /* Modal Styling */
+    .modal {
+        display: none;
+        position: fixed;
+        z-index: 1050;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        background-color: rgba(0,0,0,0.4);
+    }
+
+    .modal-content {
+        background-color: #fefefe;
+        margin: 5% auto;
+        padding: 20px;
+        border: 1px solid #e0e0e0;
+        width: 90%;
+        max-width: 550px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    /* Completely revamped modal table styling */
+    .modal-table-container {
+        width: 100%;
+        overflow-x: hidden;
+    }
+
+    .modal-table {
+        width: 100%;
+        table-layout: fixed;
+        border-collapse: collapse;
+    }
+
+    .modal-table th {
+        background-color: #f8f9fa;
+        padding: 10px 8px;
+        font-size: 14px;
+        border: 1px solid #dee2e6;
+        text-align: left;
+    }
+
+    .modal-table td {
+        padding: 10px 8px;
+        font-size: 14px;
+        border: 1px solid #dee2e6;
+        vertical-align: middle;
+    }
+
+    /* Optimized column widths */
+    .modal-table th:nth-child(1),
+    .modal-table td:nth-child(1) {
+        width: 45%;
+    }
+
+    .modal-table th:nth-child(2),
+    .modal-table td:nth-child(2) {
+        width: 20%;
+        text-align: center;
+    }
+
+    .modal-table th:nth-child(3),
+    .modal-table td:nth-child(3) {
+        width: 35%;
+    }
+
+    .modal-table .progress {
+        margin: 0;
+        height: 14px;
+    }
+
+    .modal-table .quiz-title {
+        white-space: normal;
+        word-break: break-word;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        line-height: 1.3;
+    }
+
+    .close-modal {
+        color: #aaa;
+        float: right;
+        font-size: 22px;
+        font-weight: bold;
+        cursor: pointer;
+        padding: 0 5px;
+        transition: color 0.2s;
+    }
+
+    .close-modal:hover,
+    .close-modal:focus {
+        color: #333;
+    }
+
+    .modal-title {
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #eee;
+    }
+
+    /* Card and Container Improvements */
+    .container-fluid {
+        padding: 10px;
+    }
+
+    .card {
+        margin-bottom: 24px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+
+    .card-header {
+        background-color: #fff;
+        border-bottom: 1px solid #e0e0e0;
+        padding: 1rem;
+    }
+
+    /* Match Score Progress Bar */
+    .progress {
+        height: 20px;
+        background-color: #f0f0f0;
+    }
+
+    .progress-bar {
+        min-width: 2rem;
+        color: #fff;
+        text-align: center;
+        line-height: 20px;
+    }
+
+    /* Candidate Profile Section */
+    .candidate-profile {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .candidate-profile img {
+        object-fit: cover;
+        border: 2px solid #fff;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    /* Badge Styling */
+    .badge {
+        padding: 6px 12px;
+        font-weight: 500;
+        font-size: 12px;
+    }
+
+    .badge.bg-success {
+        background-color: #28a745 !important;
+    }
+
+    /* Filter Form Improvements */
+    #filterForm {
+        padding: 1rem;
+    }
+
+    .form-select, .form-control {
+        height: 42px;
+    }
+
+    /* Responsive Adjustments */
+    @media (max-width: 767px) {
+        .modal-content {
+            width: 95%;
+            margin: 10% auto;
+            padding: 15px;
+        }
+
+        .modal-table th,
+        .modal-table td {
+            padding: 6px 4px;
+            font-size: 12px;
+        }
+
+        .modal-title {
+            font-size: 16px;
+        }
+    }
+</style>
+
+<!-- Quiz Score Modal -->
+<div id="quizScoreModal" class="modal">
+    <div class="modal-content">
+        <span class="close-modal">&times;</span>
+        <h5 class="modal-title">Quiz Scores</h5>
+        <div id="modalContent" class="modal-table-container"></div>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <!-- Filters Section -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <!-- Remove the button div and add auto-submit classes to inputs -->
+            <form id="filterForm" method="GET" class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Recruitment</label>
+                    <select name="recruitment" class="form-select auto-submit">
+                        <option value="">All Recruitments</option>
+                        {% for recruitment in recruitments %}
+                            <option value="{{ recruitment.id }}" {% if request.GET.recruitment == recruitment.id|stringformat:"s" %}selected{% endif %}>
+                                {{ recruitment.title }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Top Candidates</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control auto-submit" name="top_n" min="1"
+                               value="{{ request.GET.top_n|default:'' }}" placeholder="e.g., 10">
+                        <span class="input-group-text">candidates</span>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Minimum Match Score</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control auto-submit" name="min_score" min="0" max="100"
+                               value="{{ request.GET.min_score|default:'' }}" placeholder="e.g., 70">
+                        <span class="input-group-text">%</span>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- Candidates List -->
+    <div class="card">
+    </div>
+    <!-- Candidates List -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="card-title mb-0">Candidates Ranking</h5>
+            {% if filtered_count %}
+                <span class="badge bg-info">Showing top {{ filtered_count }} candidates</span>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Candidate</th>
+                            <th>Recruitment</th>
+                            <th>Job Position</th>
+                            <th>Match Score</th>
+                            <th>Quiz Assign</th>
+                            <th>Quiz Scores</th>
+                            <th>Experience & Qualification</th>
+                            <th>Matched Skills</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for candidate in candidates %}
+                        <tr data-candidate-url="{% url 'candidate-view-individual' candidate.id %}">
+                            <td>
+                                <div class="d-flex align-items-center">
+                                    <img src="{{ candidate.get_avatar }}" class="rounded-circle me-2" width="40" height="40">
+                                    <div>
+                                        <h6 class="mb-0">{{ candidate.name }}</h6>
+                                        <small>{{ candidate.email }}</small>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>{{ candidate.recruitment_id.title }}</td>
+                            <td>{{ candidate.job_position_id.job_position }}</td>
+                            <td>
+                                {% with score=candidate_scores|get_item:candidate.id %}
+                                    {% if score %}
+                                        <div class="progress" style="height: 20px">
+                                            <div class="progress-bar"
+                                                 role="progressbar"
+                                                 style="width: {{ score.match_score }}%"
+                                                 aria-valuenow="{{ score.match_score }}"
+                                                 aria-valuemin="0"
+                                                 aria-valuemax="100">
+                                                {% if score.match_score %}{{ score.match_score|floatformat:1 }}%{% endif %}
+                                            </div>
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">No score available</span>
+                                    {% endif %}
+                                {% endwith %}
+                            </td>
+
+                            <td>
+                                {% if candidate.id in assigned_candidate_ids %}
+                                    <span class="badge bg-success">Assigned</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">Not Assigned</span>
+                                {% endif %}
+                            </td>
+
+                             <!-- Quiz Scores -->
+                             <td>
+                                {% with score=candidate_scores|get_item:candidate.id %}
+                                    {% if score.quiz_scores %}
+                                        <div class="quiz-score-icon" onclick="showQuizScores(event, '{{ candidate.id }}')">
+                                            <i class="fas fa-info-circle text-primary"></i> <span class="text-primary">View Scores</span>
+
+                                            <!-- Hidden quiz data for modal -->
+                                            <div id="quiz-data-{{ candidate.id }}" style="display: none;">
+                                                <table class="modal-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Quiz</th>
+                                                            <th>Status</th>
+                                                            <th>Score</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {% for quiz in score.quiz_scores %}
+                                                            <tr>
+                                                                <td>
+                                                                    <span class="quiz-title fw-medium">{{ quiz.quiz_title }}</span>
+                                                                </td>
+                                                                <td>
+                                                                    {% if quiz.status == 'pending' %}
+                                                                        <span class="text-muted">Pending</span>
+                                                                    {% else %}
+                                                                        <span class="{% if quiz.passed %}text-success{% else %}text-danger{% endif %}">
+                                                                            {{ quiz.status }}
+                                                                        </span>
+                                                                    {% endif %}
+                                                                </td>
+                                                                <td>
+                                                                    {% if quiz.status == 'pending' %}
+                                                                        <span class="text-muted">-</span>
+                                                                    {% else %}
+                                                                        <div class="progress">
+                                                                            <div class="progress-bar {% if quiz.passed %}bg-success{% else %}bg-danger{% endif %}"
+                                                                                role="progressbar"
+                                                                                style="width: {{ quiz.score }}%"
+                                                                                aria-valuenow="{{ quiz.score }}"
+                                                                                aria-valuemin="0"
+                                                                                aria-valuemax="100">
+                                                                                {{ quiz.score|floatformat:1 }}%
+                                                                            </div>
+                                                                        </div>
+                                                                    {% endif %}
+                                                                </td>
+                                                            </tr>
+                                                        {% endfor %}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">
+                                            <i class="fas fa-minus-circle"></i>
+                                            No quizzes
+                                        </span>
+                                    {% endif %}
+                                {% endwith %}
+                            </td>
+
+                            <td>
+                                {% with score=candidate_scores|get_item:candidate.id %}
+                                    {% if score %}
+                                        <div>
+                                            <strong>Experience:</strong>
+                                            {{ score.experience_years }} years
+                                        </div>
+                                        <div>
+                                            <strong>Qualification:</strong>
+                                            {{ score.qualification }}
+                                        </div>
+                                    {% endif %}
+                                {% endwith %}
+                            </td>
+                            <td>
+                                {% with score=candidate_scores|get_item:candidate.id %}
+                                    {% if score %}
+                                        {% for skill in score.matched_skills %}
+                                            <span class="badge bg-success me-1">{{ skill }}</span>
+                                        {% endfor %}
+                                    {% endif %}
+                                {% endwith %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Simple Modal functionality
+const modal = document.getElementById("quizScoreModal");
+const modalContent = document.getElementById("modalContent");
+const closeModal = document.getElementsByClassName("close-modal")[0];
+
+// Show quiz scores in modal
+function showQuizScores(event, candidateId) {
+    // Prevent row click navigation
+    event.stopPropagation();
+
+    // Get quiz data from hidden div
+    const quizData = document.getElementById(`quiz-data-${candidateId}`).innerHTML;
+
+    // Set modal content
+    modalContent.innerHTML = quizData;
+
+    // Display modal
+    modal.style.display = "block";
+}
+
+// Close modal when user clicks on × button
+closeModal.onclick = function() {
+    modal.style.display = "none";
+}
+
+// Close modal when user clicks outside of it
+window.onclick = function(event) {
+    if (event.target == modal) {
+        modal.style.display = "none";
+    }
+}
+
+// Handle row clicks for navigation
+document.querySelectorAll('tr[data-candidate-url]').forEach(row => {
+    row.addEventListener('click', function(e) {
+        // Only navigate if the click wasn't on the quiz icon
+        if (!e.target.closest('.quiz-score-icon')) {
+            window.location = this.getAttribute('data-candidate-url');
+        }
+    });
+});
+
+// Auto-submit filter form on change
+document.querySelectorAll('.auto-submit').forEach(input => {
+    input.addEventListener('change', function() {
+        document.getElementById('filterForm').submit();
+    });
+});
+</script>
+{% endblock %}

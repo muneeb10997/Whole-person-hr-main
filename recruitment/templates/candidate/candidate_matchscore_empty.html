@@ -1,0 +1,53 @@
+{% extends 'index.html' %}
+{% block content %}
+{% load static %}
+{% load i18n %}
+{% load basefilters %}
+{% load recruitmentfilters horillafilters %}
+
+
+<div class="container-fluid">
+    <!-- Filters Section -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form id="filterForm" method="GET" class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Recruitment</label>
+                    <select name="recruitment" class="form-select auto-submit">
+                        <option value="">All Recruitments</option>
+                        {% for recruitment in recruitments %}
+                            <option value="{{ recruitment.id }}" {% if request.GET.recruitment == recruitment.id|stringformat:"s" %}selected{% endif %}>
+                                {{ recruitment.title }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Top Candidates</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control auto-submit" name="top_n" min="1"
+                               value="{{ request.GET.top_n|default:'' }}" placeholder="e.g., 10">
+                        <span class="input-group-text">candidates</span>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Minimum Match Score</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control auto-submit" name="min_score" min="0" max="100"
+                               value="{{ request.GET.min_score|default:'' }}" placeholder="e.g., 70">
+                        <span class="input-group-text">%</span>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Candidates List -->
+    <div class="card">
+        <div class="card-header">
+            <h5 class="card-title">Candidates Ranking</h5>
+        </div>
+        <h1>No candidate will found for this job </h1>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,165 @@
+<div class="bg-gray-100 p-6">
+  <div class="max-w-6xl mx-auto space-y-6">
+    <!-- Main Score Card -->
+    <div class="bg-white rounded-lg shadow p-6">
+      <div class="flex justify-between items-start">
+        <div>
+          <h2 class="text-2xl font-bold">Match Score</h2>
+        </div>
+        <div class="text-right">
+          <div class="text-3xl font-bold text-blue-600">{{ match_analysis.match_score }}%</div>
+        </div>
+      </div>
+    </div>
+    <!-- Detailed Metrics Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- Skills Match -->
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <i class="fas fa-star text-yellow-500"></i>
+          Skills Match
+        </h3>
+        <div class="space-y-4">
+          <div>
+            <div class="flex justify-between mb-2">
+              <span class="text-sm font-medium">Match Score</span>
+              <span class="text-sm font-medium text-blue-600">{{ match_analysis.skills_match_score }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5">
+              <div class="bg-blue-600 h-2.5 rounded-full" style="width: {{ match_analysis.skills_match_score }}%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="text-sm font-medium mb-2">Present Skills</div>
+            <div class="flex flex-wrap gap-2">
+              {% for skill in match_analysis.skills_matched %}
+                <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                  <i class="fas fa-check text-xs"></i>
+                  {{ skill }}
+                </span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Experience Match -->
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <i class="fas fa-briefcase text-blue-500"></i>
+          Experience Match
+        </h3>
+        <div class="space-y-4">
+          <div>
+            <div class="flex justify-between mb-2">
+              <span class="text-sm font-medium">Match Score</span>
+              <span class="text-sm font-medium text-blue-600">
+                {% with exp_score=analysis_details.experience_analysis.total_experience_match|default:0 %}
+                  {{ exp_score }}%
+                {% endwith %}
+              </span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5">
+              <div class="bg-blue-600 h-2.5 rounded-full"
+                   style="width: {% with exp_score=analysis_details.experience_analysis.total_experience_match|default:0 %}{{ exp_score }}%{% endwith %}">
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="text-sm text-gray-500">Total Years</div>
+              <div class="text-lg font-medium">{{ match_analysis.experience_years }} Years</div>
+            </div>
+            <div>
+              <div class="text-sm text-gray-500">Relevant Experience</div>
+              <div class="text-lg font-medium">
+                {{ analysis_details.experience_match.relevant_years|default:"N/A" }} Years
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Education Match -->
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <i class="fas fa-graduation-cap text-purple-500"></i>
+          Education Match
+        </h3>
+        <div class="space-y-4">
+          <div>
+            <div class="text-sm text-gray-500">Highest Degree</div>
+            <div class="text-lg font-medium">{{ match_analysis.highest_qualification }}</div>
+            {% if analysis_details.education_match.certifications %}
+              <div class="mt-2 flex flex-wrap gap-2">
+                {% for cert in analysis_details.education_match.certifications %}
+                  <span class="px-2 py-1 bg-gray-100 rounded-full text-sm">{{ cert }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Culture Fit -->
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <i class="fas fa-users text-green-500"></i>
+          Culture Fit
+        </h3>
+        <div class="space-y-4">
+          {% if analysis_details.culture_fit %}
+            <div>
+              <div class="flex justify-between mb-2">
+                <span class="text-sm font-medium">Match Score</span>
+                <span class="text-sm font-medium text-blue-600">
+                  {{ analysis_details.culture_fit.score }}%
+                </span>
+              </div>
+              <div class="w-full bg-gray-200 rounded-full h-2.5">
+                <div class="bg-blue-600 h-2.5 rounded-full"
+                     style="width: {{ analysis_details.culture_fit.score }}%"></div>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              {% for strength in analysis_details.culture_fit.strengths %}
+                <span class="px-2 py-1 bg-gray-100 rounded-full text-sm">{{ strength }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Insights and Flags -->
+    <div class="grid grid-cols-2 gap-4">
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <i class="fas fa-trophy"></i>
+          Key Insights
+        </h3>
+        <ul class="space-y-2">
+          {% for insight in analysis_details.experience_analysis.key_achievements %}
+            <li class="flex items-start gap-2">
+              <i class="fas fa-check text-green-500 mt-1"></i>
+              <span>{{ insight.achievement }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <i class="fas fa-exclamation-circle"></i>
+          Attention Points
+        </h3>
+        <ul class="space-y-2">
+            <li class="flex items-start gap-2">
+              <i class="fas fa-exclamation-circle text-yellow-500 mt-1"></i>
+              <span>{{ analysis_details.matching_summary.one_line_summary }}</span>
+            </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>

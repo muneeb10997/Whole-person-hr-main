@@ -1,0 +1,569 @@
+{% extends 'index.html' %}
+{% block content %} {% load static i18n horillafilters mathfilters recruitmentfilters %}
+<div class="container-fluid">
+    <!-- Filters Section -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form id="filterForm" method="GET" class="row g-3">
+                <!-- Assignment Type -->
+                <div class="col-md-4">
+                    <label class="form-label">Assignment Type</label>
+                    <select name="assignment_type" id="assignment_type" class="form-select auto-submit">
+                        <option value="">Select Type...</option>
+                        <option value="candidate" {% if request.GET.assignment_type == 'candidate' %}selected{% endif %}>
+                            Candidate Assessment
+                        </option>
+                        <option value="employee" {% if request.GET.assignment_type == 'employee' %}selected{% endif %}>
+                            Employee Assessment
+                        </option>
+                    </select>
+                </div>
+                <!-- Recruitment Filter -->
+                <div class="col-md-4" id="recruitment_filter_container">
+                    <label class="form-label">Recruitment</label>
+                    <select name="recruitment" class="form-select auto-submit">
+                        <option value="">All Recruitments</option>
+                        {% for recruitment in recruitments %}
+                            <option value="{{ recruitment.id }}"
+                                    {% if request.GET.recruitment == recruitment.id|stringformat:"s" %}selected{% endif %}>
+                                {{ recruitment.title }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Quiz Assignment Form -->
+    <div class="card">
+        <div class="card-header">
+            <h5 class="card-title mb-0">Assign Quiz</h5>
+        </div>
+        <div class="card-body">
+            <form id="assign-quiz-form" method="POST" action="{% url 'assessment-dashboard' %}">
+                {% csrf_token %}
+                <!-- Assignee Selection Table -->
+                <div class="table-responsive mb-4">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;">
+                                    <input type="checkbox" class="form-check-input" id="select-all">
+                                </th>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Recruitment/Department</th>
+                                <th>Position</th>
+                                <th>Quiz Assigned</th>
+                            </tr>
+                        </thead>
+                        <tbody id="candidate_list">
+                            {% for candidate in candidates %}
+                            <tr class="candidate-item" data-recruitment="{{ candidate.recruitment_id.id }}">
+                                <td>
+                                    <input type="checkbox" name="assignee_candidate_ids[]"
+                                           value="{{ candidate.id }}"
+                                           class="form-check-input assignee-checkbox">
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <img src="{{ candidate.get_avatar }}"
+                                             class="rounded-circle me-2"
+                                             width="32" height="32">
+                                        {{ candidate.name }}
+                                    </div>
+                                </td>
+                                <td>{{ candidate.email }}</td>
+                                <td>{{ candidate.recruitment_id.title }}</td>
+                                <td>{{ candidate.job_position_id.job_position }}</td>
+                                <td>
+                                    {% if candidate.id in assigned_candidate_ids %}
+                                        <span class="badge bg-success">Assigned</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Not Assigned</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tbody id="employee_list" style="display: none;">
+                            {% for employee in employees %}
+                            <tr>
+                                <td>
+                                    <input type="checkbox" name="assignee_employee_ids[]"
+                                           value="{{ employee.id }}"
+                                           class="form-check-input assignee-checkbox">
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <img src="{{ employee.get_avatar }}"
+                                             class="rounded-circle me-2"
+                                             width="32" height="32">
+                                        {{ employee.name }}
+                                    </div>
+                                </td>
+                                <td>{{ employee.email }}</td>
+                                <td>{{ employee.department }}</td>
+                                <td>{{ employee.job_position }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+
+                <!-- Quiz Deadline Section -->
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h6 class="mb-3">Set Quiz Deadline</h6>
+                        <div class="row align-items-center">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <input type="date"
+                                           name="quiz_deadline_date"
+                                           id="quiz_deadline_date"
+                                           class="form-control"
+                                           required>
+                                    <input type="time"
+                                           name="quiz_deadline_time"
+                                           id="quiz_deadline_time"
+                                           class="form-control"
+                                           required>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+
+                 <!-- Selected Skills Display -->
+                <div id="selected-skills-container" class="mb-4" style="display: none;">
+                    <h6 class="mb-3">Selected Skills</h6>
+                    <div id="selected-skills-badges" class="d-flex flex-wrap gap-2">
+                        <!-- Selected skills will be displayed here as badges -->
+                    </div>
+                </div>
+
+                <!-- Skills Selection -->
+                <div class="mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0">Select Skills for Assessment</h6>
+                        <div class="search-container">
+                            <div class="input-group">
+                                <span class="input-group-text">
+                                    <i class="fas fa-search"></i>
+                                </span>
+                                <input type="text"
+                                       id="skills-search"
+                                       class="form-control"
+                                       placeholder="Search skills...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        {% for category, subcategories in skills.items %}
+                            <div class="col-md-4 mb-3">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h6 class="mb-0">{{ category }}</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <select class="form-select mb-3 subcategory-select"
+                                                data-category="{{ category }}">
+                                            <option value="">Select {{ category }} Subcategory...</option>
+                                            {% for subcategory, topics in subcategories.items %}
+                                                <option value="{{ subcategory }}">{{ subcategory }}</option>
+                                            {% endfor %}
+                                        </select>
+
+                                        {% for subcategory, topics in subcategories.items %}
+                                            <div class="skills-group"
+                                                 data-category="{{ category }}"
+                                                 data-subcategory="{{ subcategory }}"
+                                                 style="display: none;">
+                                                {% for topic in topics %}
+                                                    <div class="form-check skill-item">
+                                                        <input type="checkbox"
+                                                               name="skills[]"
+                                                               value="{{ topic }}"
+                                                               class="form-check-input skill-checkbox"
+                                                               id="skill-{{ topic|slugify }}"
+                                                               data-skill-name="{{ topic }}"
+                                                               data-category="{{ category }}"
+                                                               data-subcategory="{{ subcategory }}">
+                                                        <label class="form-check-label" style="font-weight:100;"
+                                                               for="skill-{{ topic|slugify }}">
+                                                            {{ topic }}
+                                                        </label>
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="text-end">
+                    <button type="submit" class="btn btn-primary">
+                        Assign Quiz
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+
+<div class="container mx-auto px-4 py-6">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Quiz Results</h1>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-white p-4 rounded-lg shadow mb-6">
+        <form method="GET" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <input type="hidden" name="view_results" value="true">
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Recruitment</label>
+                <select name="recruitment" class="mt-1 block w-full rounded-md border-gray-300">
+                    <option value="">All Recruitments</option>
+                    {% for recruitment in recruitments %}
+                    <option value="{{ recruitment.id }}" {% if selected_recruitment == recruitment.id|stringformat:"s" %}selected{% endif %}>
+                        {{ recruitment.title }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Status</label>
+                <select name="status" class="mt-1 block w-full rounded-md border-gray-300">
+                    <option value="">All Statuses</option>
+                    <option value="completed" {% if selected_status == 'completed' %}selected{% endif %}>Completed</option>
+                    <option value="in_progress" {% if selected_status == 'in_progress' %}selected{% endif %}>In Progress</option>
+                    <option value="pending" {% if selected_status == 'pending' %}selected{% endif %}>Pending</option>
+                    <option value="expired" {% if selected_status == 'expired' %}selected{% endif %}>Expired</option>
+                </select>
+            </div>
+
+            <div class="flex items-end">
+                <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                    Apply Filters
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Results Table -->
+    <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Recruitment</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Score</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Completion Date</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {% for assignment in quiz_assignments %}
+                <tr>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% if assignment.assigned_to_candidate %}
+                            {{ assignment.assigned_to_candidate.name }}
+                        {% else %}
+                            {{ assignment.assigned_to_employee.name }}
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% if assignment.assigned_to_candidate %}
+                            Candidate
+                        {% else %}
+                            Employee
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% if assignment.assigned_to_candidate %}
+                            {{ assignment.assigned_to_candidate.recruitment_id.title }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% if assignment.score is not None %}
+                            <span class="{% if assignment.passed %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ assignment.score }}%
+                            </span>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
+                            {% if assignment.status == 'completed' %}bg-green-100 text-green-800
+                            {% elif assignment.status == 'in_progress' %}bg-blue-100 text-blue-800
+                            {% elif assignment.status == 'expired' %}bg-red-100 text-red-800
+                            {% else %}bg-gray-100 text-gray-800{% endif %}">
+                            {{ assignment.get_status_display }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {% if assignment.completion_date %}
+                            {{ assignment.completion_date|date:"M d, Y" }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="px-6 py-4 text-center text-gray-500">
+                        No quiz assignments found matching the selected criteria.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Cache DOM elements
+        const filterForm = document.getElementById('filterForm');
+        const assignmentType = document.getElementById('assignment_type');
+        const recruitmentContainer = document.getElementById('recruitment_filter_container');
+        const candidateList = document.getElementById('candidate_list');
+        const employeeList = document.getElementById('employee_list');
+
+
+
+         // Get the date and time inputs
+         const dateInput = document.getElementById('quiz_deadline_date');
+         const timeInput = document.getElementById('quiz_deadline_time');
+
+         // Function to get today's date in YYYY-MM-DD format
+         function getTodayDate() {
+             const today = new Date();
+             const year = today.getFullYear();
+             const month = String(today.getMonth() + 1).padStart(2, '0');
+             const day = String(today.getDate()).padStart(2, '0');
+             return `${year}-${month}-${day}`;
+         }
+
+         // Set min attribute to today's date
+         const today = getTodayDate();
+         dateInput.setAttribute('min', today);
+         dateInput.value = today; // Set default value to today
+
+         // Set default time to current time + 1 hour
+         const now = new Date();
+         now.setHours(now.getHours() + 1);
+         const defaultTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+         timeInput.value = defaultTime;
+
+         // Add event listener for date changes
+         dateInput.addEventListener('input', function() {
+             const selectedDate = new Date(this.value);
+             const today = new Date(getTodayDate());
+
+             // If selected date is before today, reset to today
+             if (selectedDate < today) {
+                 this.value = getTodayDate();
+                 alert('Cannot select a past date. The date has been reset to today.');
+             }
+         });
+
+         // Prevent manual entry of past dates
+         dateInput.addEventListener('keydown', function(e) {
+             e.preventDefault();
+             return false;
+         });
+
+
+
+        const subcategorySelects = document.querySelectorAll('.subcategory-select');
+        const skillsGroups = document.querySelectorAll('.skills-group');
+        const searchInput = document.getElementById('skills-search');
+        const selectedSkillsContainer = document.getElementById('selected-skills-container');
+        const selectedSkillsBadges = document.getElementById('selected-skills-badges');
+
+        // Handle subcategory selection
+        subcategorySelects.forEach(select => {
+            select.addEventListener('change', function() {
+                const category = this.dataset.category;
+                const selectedSubcategory = this.value;
+
+                // Hide all skills groups for this category
+                skillsGroups.forEach(group => {
+                    if (group.dataset.category === category) {
+                        group.style.display = 'none';
+                    }
+                });
+
+                // Show selected subcategory's skills
+                if (selectedSubcategory) {
+                    const targetGroup = document.querySelector(
+                        `.skills-group[data-category="${category}"][data-subcategory="${selectedSubcategory}"]`
+                    );
+                    if (targetGroup) {
+                        targetGroup.style.display = 'block';
+                    }
+                }
+            });
+        });
+
+        // Search functionality
+        searchInput.addEventListener('input', function() {
+            const searchTerm = this.value.toLowerCase();
+            document.querySelectorAll('.skill-item').forEach(item => {
+                const skillName = item.querySelector('.form-check-label').textContent.toLowerCase();
+                if (skillName.includes(searchTerm)) {
+                    item.style.display = 'block';
+                    // Show parent groups if there's a match
+                    const group = item.closest('.skills-group');
+                    if (group) {
+                        group.style.display = 'block';
+                        // Select the corresponding subcategory in dropdown
+                        const subcategorySelect = group.parentElement.querySelector('.subcategory-select');
+                        if (subcategorySelect) {
+                            subcategorySelect.value = group.dataset.subcategory;
+                        }
+                    }
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        });
+
+        // Handle selected skills display
+        document.querySelectorAll('.skill-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                updateSelectedSkillsBadges();
+            });
+        });
+
+        function updateSelectedSkillsBadges() {
+            const selectedCheckboxes = document.querySelectorAll('.skill-checkbox:checked');
+            selectedSkillsBadges.innerHTML = '';
+
+            if (selectedCheckboxes.length > 0) {
+                selectedSkillsContainer.style.display = 'block';
+                selectedCheckboxes.forEach(checkbox => {
+                    const badge = createSkillBadge(
+                        checkbox.dataset.skillName,
+                        checkbox.dataset.category,
+                        checkbox.dataset.subcategory,
+                        checkbox
+                    );
+                    selectedSkillsBadges.appendChild(badge);
+                });
+            } else {
+                selectedSkillsContainer.style.display = 'none';
+            }
+        }
+
+        function createSkillBadge(skillName, category, subcategory, checkbox) {
+            const badge = document.createElement('div');
+            badge.className = 'badge bg-primary d-flex align-items-center gap-2 p-2';
+            badge.innerHTML = `
+                <span>${skillName}</span>
+                <button type="button" class="btn-close btn-close-white" style="font-size: 0.5rem;"></button>
+            `;
+
+            badge.querySelector('.btn-close').addEventListener('click', () => {
+                checkbox.checked = false;
+                updateSelectedSkillsBadges();
+            });
+
+            return badge;
+        }
+
+        // Initialize selected skills display
+        updateSelectedSkillsBadges();
+
+
+
+        // Function to update visibility based on assignment type
+        function updateVisibility(type) {
+            if (type === 'candidate') {
+                recruitmentContainer.style.display = 'block';
+                candidateList.style.display = 'table-row-group';
+                employeeList.style.display = 'none';
+            } else if (type === 'employee') {
+                recruitmentContainer.style.display = 'none';
+                candidateList.style.display = 'none';
+                employeeList.style.display = 'table-row-group';
+            } else {
+                recruitmentContainer.style.display = 'none';
+                candidateList.style.display = 'none';
+                employeeList.style.display = 'none';
+            }
+        }
+        // Auto-submit filter form when selections change
+        document.querySelectorAll('.auto-submit').forEach(function(element) {
+            if (element.id !== 'assignment_type') { // Exclude assignment type from auto-submit
+                element.addEventListener('change', function() {
+                    filterForm.submit();
+                });
+            }
+        });
+        // Handle assignment type switching
+        assignmentType.addEventListener('change', function() {
+            updateVisibility(this.value);
+        });
+        // Initialize visibility based on current selection
+        updateVisibility(assignmentType.value);
+        // Select all functionality
+        document.getElementById('select-all').addEventListener('change', function() {
+            const checkboxes = document.querySelectorAll('.assignee-checkbox');
+            checkboxes.forEach(checkbox => {
+                const row = checkbox.closest('tr');
+                if (row.style.display !== 'none') {
+                    checkbox.checked = this.checked;
+                }
+            });
+        });
+        // Form validation
+        document.getElementById('assign-quiz-form').addEventListener('submit', function(e) {
+            const selectedAssignees = document.querySelectorAll('input[name="assignee_candidate_ids[]"]:checked');
+
+            const selectedDateTime = new Date(dateInput.value + 'T' + timeInput.value);
+            const now = new Date();
+
+            if (selectedDateTime <= now) {
+                e.preventDefault();
+                alert('Please select a future time. The deadline must be at least a few minutes from now.');
+
+                // Reset time to current time + 1 hour if it's today
+                if (dateInput.value === getTodayDate()) {
+                    const newTime = new Date();
+                    newTime.setHours(newTime.getHours() + 1);
+                    timeInput.value = `${String(newTime.getHours()).padStart(2, '0')}:${String(newTime.getMinutes()).padStart(2, '0')}`;
+                }
+            }
+            if (selectedSkills.length === 0){
+                const selectedAssignees = document.querySelectorAll('input[name="assignee_employee_ids[]"]:checked');
+            }
+            const selectedSkills = document.querySelectorAll('input[name="skills[]"]:checked');
+            if (selectedAssignees.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one assignee');
+            }
+            if (selectedSkills.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one skill for assessment');
+            }
+        });
+    });
+</script>
+{% endblock %}
