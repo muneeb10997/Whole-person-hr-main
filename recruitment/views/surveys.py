@@ -38,6 +38,7 @@ from recruitment.forms import (
 )
 from recruitment.models import (
     Candidate,
+    CandidateApplication,
     JobPosition,
     Recruitment,
     RecruitmentSurvey,
@@ -332,7 +333,7 @@ def application_form(request):
     """
     This method renders candidate form to create candidate
     """
-    form = ApplicationForm()
+    form = ApplicationForm(request=request)
     recruitment = None
     recruitment_id = request.GET.get("recruitmentId")
     resume_id = request.GET.get("resumeId")
@@ -340,135 +341,94 @@ def application_form(request):
 
     if resume_obj:
         initial_data = {"resume": resume_obj.file.url if resume_obj else None}
-        form = ApplicationForm(initial=initial_data)
+        form = ApplicationForm(initial=initial_data, request=request)
 
     if recruitment_id is not None:
-        recruitment = Recruitment.objects.filter(id=recruitment_id)
-        if recruitment.exists():
-            recruitment = recruitment.first()
-    print("obj resume found ")
-    if request.POST:
-        print("here is post request")
+        recruitment = Recruitment.objects.filter(id=recruitment_id).first()
 
-        if "resume" not in request.FILES and resume_id:
-            if resume_obj and resume_obj.file:
-                file_content = resume_obj.file.read()
-                pdf_file = SimpleUploadedFile(
-                    resume_obj.file.name, file_content, content_type="application/pdf"
-                )
-                request.FILES["resume"] = pdf_file
-
-        form = ApplicationForm(request.POST, request.FILES)
+    if request.method == "POST":
+        form = ApplicationForm(request.POST, request.FILES, request=request)
+        
         if form.is_valid():
-            candidate_obj = form.save(commit=False)
-            recruitment_obj = candidate_obj.recruitment_id
+            # Save the candidate application using the form's save method
+            candidate_obj = form.save()
+            
+            # Find the associated candidate application
+            candidate_application = CandidateApplication.objects.get(
+                candidate=candidate_obj, 
+                recruitment_id=form.cleaned_data['recruitment']
+            )
+            
+            # Set the stage
+            recruitment_obj = candidate_application.recruitment_id
             stages = recruitment_obj.stage_set.all()
+            
             if stages.filter(stage_type="applied").exists():
-                candidate_obj.stage_id = stages.filter(stage_type="applied").first()
+                candidate_application.stage_id = stages.filter(stage_type="applied").first()
             else:
-                candidate_obj.stage_id = stages.order_by("sequence").first()
+                candidate_application.stage_id = stages.order_by("sequence").first()
+            
+            candidate_application.save()
+
             messages.success(request, _("Application saved."))
 
-            resume = request.FILES.get("resume")
-            if resume:
-                resume_path = f"recruitment/resume/{resume.name}"
-
-                with default_storage.open(resume_path, "wb+") as destination:
-                    for chunk in resume.chunks():
-                        destination.write(chunk)
-
-                candidate_obj.resume = resume_path
+            # Resume processing API call (similar to your existing code)
             try:
-                profile = request.FILES["profile"] if request.FILES["profile"] else None
-                profile_path = f"recruitment/profile/{candidate_obj.name.replace(' ', '_')}_{profile.name}_{uuid4()}"
-                with default_storage.open(profile_path, "wb+") as destination:
-                    for chunk in profile.chunks():
-                        destination.write(chunk)
-                candidate_obj.profile = profile_path
-            except:
-                pass
-            request.session["candidate"] = serializers.serialize(
-                "json", [candidate_obj]
-            )
-            if RecruitmentSurvey.objects.filter(
-                recruitment_ids=recruitment_id
-            ).exists():
-                try:
-                    employee = request.user.employee_get
-                    if (
-                        not request.user.has_perm("perms.recruitment.add_candidate")
-                        or employee not in recruitment.recruitment_managers.all()
-                        or not employee.stage_set.filter(recruitment_id=recruitment)
-                    ):
-                        return redirect(candidate_survey)
-                except:
-                    return redirect(candidate_survey)
-            candidate_obj.save()
-            #############             Add APi Path to analyze the resume ############
-            try:
-                # Read the resume file
-                resume_file = request.FILES.get('resume')  # Adjust field name as needed
-                print("here is the resume file ",resume_file.name)
-                print("here is resume chunks",resume.chunks())
+                resume_file = request.FILES.get("resume")
                 if resume_file:
-                    # Convert file to base64
-                    # Initialize a list to accumulate all chunks
                     file_data = b''
-                    # Iterate through the chunks and combine them
                     for chunk in resume_file.chunks():
                         file_data += chunk
 
-                    # Now encode the complete file data in base64
                     resume_content = base64.b64encode(file_data).decode('utf-8')
-                    print("here is the resume content", resume_content)
-                    print("here is the job id ",recruitment_id)
-                    # Prepare the API request data
+                    
                     api_data = {
                         'candidate_id': candidate_obj.id,
                         'file': resume_content,
                         'file_name': resume_file.name,
                         'file_type': resume_file.content_type,
-                        'job_id' :recruitment_id,
-                        'job_name': str(candidate_obj.recruitment_id)
+                        'job_id': recruitment_id,
+                        'job_name': str(recruitment_obj)
                     }
-                    print("make calls ")
-                    api_url= f'{settings.RESUME_ASSESSMENT_API_URL}process_canidate_resume'
-                    print("make calls ",api_url)
-                    # Make the API call
+                    
+                    api_url = f'{settings.RESUME_ASSESSMENT_API_URL}process_canidate_resume'
+                    
                     response = requests.post(
-                        api_url,  # Add this URL to your settings
+                        api_url,
                         json=api_data,
-                        headers={
-                            'Content-Type': 'application/json'
-                        }
+                        headers={'Content-Type': 'application/json'}
                     )
-                    print("response")
-                    print(response.content)
+                    
                     if response.status_code == 200:
-                        # You might want to save the assessment results
                         assessment_results = response.json()
                         if 'redirect_url' in assessment_results:
-                                request.session['post_success_redirect'] = assessment_results['redirect_url']
-                        # Add code here to save or process the assessment results
+                            request.session['post_success_redirect'] = assessment_results['redirect_url']
+                        
                         messages.success(request, _("Application saved and resume processed successfully."))
+                        
                         if resume_obj:
                             resume_obj.is_candidate = True
                             resume_obj.save()
+                        
                         context = {
                             "redirect_to_login": True,
                             "redirect_url": assessment_results.get('redirect_url'),
-                            "countdown_seconds": 5  # Set countdown time
+                            "countdown_seconds": 5
                         }
                         return render(request, "candidate/success.html", context)
                     else:
                         messages.warning(request, _("Application saved but resume processing failed."))
+            
             except Exception as e:
-                # Log the error but don't prevent the application from being saved
                 print(f"Resume processing error: {str(e)}")
                 messages.warning(request, _("Application saved but resume processing encountered an error."))
-        form.fields["job_position_id"].queryset = (
-            form.instance.recruitment_id.open_positions.all()
-        )
+
+            return render(request, "candidate/success.html")
+        
+        # If form is invalid, update job position queryset
+        if recruitment:
+            form.fields["job_position"].queryset = recruitment.open_positions.all()
+
     return render(
         request,
         "candidate/application_form.html",

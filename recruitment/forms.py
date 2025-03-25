@@ -454,106 +454,158 @@ class CandidateCreationForm(ModelForm):
 
 
 
+from django import forms
+from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
+from .models import Candidate, CandidateApplication, Recruitment, JobPosition, Resume
+from . import widgets  # Ensure this module contains RecruitmentAjaxWidget
+
 class ApplicationForm(RegistrationForm):
     """
-    Form for create Candidate through application process
+    Form for creating a Candidate through the application process.
     """
+
     load = forms.CharField(widget=widgets.RecruitmentAjaxWidget, required=False)
-    active_recruitment = Recruitment.objects.filter(
-        is_active=True, closed=False, is_published=True
-    )
-    recruitment_id = forms.ModelChoiceField(
-        queryset=active_recruitment,
-        widget=forms.Select(attrs={"data-widget": "ajax-widget"})
+    recruitment = forms.ModelChoiceField(
+        queryset=Recruitment.objects.filter(is_active=True, closed=False, is_published=True),
+        widget=forms.Select(attrs={"data-widget": "ajax-widget"}),
+        required=True,
+        label=_("Recruitment"),
     )
     resume = forms.FileField(
         required=False,
         validators=[validate_pdf],
         help_text=_("Upload PDF file only"),
-        widget=forms.FileInput(attrs={"accept": ".pdf"})
+        widget=forms.FileInput(attrs={"accept": ".pdf"}),
+    )
+    job_position = forms.ModelChoiceField(
+        queryset=JobPosition.objects.none(),  # Updated dynamically
+        required=True,
+        label=_("Job Position"),
+        widget=forms.Select(attrs={"data-widget": "ajax-widget"}),
     )
 
     class Meta:
-        """
-        Meta class to add the additional info
-        """
         model = Candidate
         fields = [
-            'name',
-            'email',
-            'mobile',
-            'profile',
-            'gender',
-            'address',
-            'country',
-            'state',
-            'city',
-            'zip',
-            'dob',
-            'recruitment_id',
+            "name",
+            "email",
+            "mobile",
+            "profile",
+            "gender",
+            "address",
+            "country",
+            "state",
+            "city",
+            "zip",
+            "dob",
         ]
         widgets = {
-            'dob': forms.DateInput(attrs={'type': 'date'}),
-            'profile': forms.FileInput(attrs={'accept': '.jpg, .jpeg, .png'}),
+            "dob": forms.DateInput(attrs={"type": "date"}),
+            "profile": forms.FileInput(attrs={"accept": ".jpg, .jpeg, .png"}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, request=None, **kwargs):
+        """
+        Initialize form and set job positions dynamically based on selected recruitment.
+        """
         super().__init__(*args, **kwargs)
-        request = getattr(_thread_locals, "request", None)
-        
-        # Configure profile field
-        self.fields['profile'].required = False
-        
-        # Set initial recruitment if provided in GET parameters
-        if request and request.GET.get('recruitmentId'):
-            try:
-                recruitment = Recruitment.objects.get(
-                    id=request.GET.get('recruitmentId'),
-                    is_active=True,
-                    closed=False,
-                    is_published=True
-                )
-                self.fields['recruitment_id'].initial = recruitment
-            except Recruitment.DoesNotExist:
-                pass
+
+        # Profile field is optional
+        self.fields["profile"].required = False
+
+        if request:
+            recruitment_id = request.GET.get("recruitmentId")
+            if recruitment_id:
+                try:
+                    recruitment = Recruitment.objects.get(
+                        id=recruitment_id, is_active=True, closed=False, is_published=True
+                    )
+                    self.fields["recruitment"].initial = recruitment
+                    self.fields["job_position"].queryset = recruitment.open_positions.all()
+                except Recruitment.DoesNotExist:
+                    pass
 
     def clean(self):
+        """
+        Custom validation for recruitment, job position, resume, and profile.
+        """
         cleaned_data = super().clean()
-        profile = cleaned_data.get('profile')
-        resume = cleaned_data.get('resume')
-        recruitment = cleaned_data.get('recruitment_id')
-        
+        recruitment = cleaned_data.get("recruitment")
+        job_position = cleaned_data.get("job_position")
+        profile = cleaned_data.get("profile")
+        resume = cleaned_data.get("resume")
+
         errors = {}
-        
+
         if not recruitment:
-            errors['recruitment_id'] = _("Recruitment is required")
-            
+            errors["recruitment"] = _("Recruitment is required")
+
         if recruitment:
             if not resume and not recruitment.optional_resume:
-                errors['resume'] = _("This field is required")
-                
+                errors["resume"] = _("This field is required")
+
             if not profile and not recruitment.optional_profile_image:
-                errors['profile'] = _("This field is required")
-                
+                errors["profile"] = _("This field is required")
+
+            if job_position and job_position not in recruitment.open_positions.all():
+                errors["job_position"] = _("Selected job position is not valid for this recruitment")
+
         if errors:
             raise ValidationError(errors)
-            
+
         return cleaned_data
 
     def save(self, commit=True):
-        instance = super().save(commit=False)
-        if commit:
-            instance.save()
-            
-            # Handle resume upload
-            if self.cleaned_data.get('resume'):
-                Resume.objects.create(
-                    file=self.cleaned_data['resume'],
-                    recruitment_id=instance.recruitment_id,
-                    is_candidate=True
-                )
-                
-        return instance
+        """
+        Save the Candidate and create or update the CandidateApplication.
+        """
+        # Ensure Candidate is unique based on email
+        candidate, created = Candidate.objects.get_or_create(
+            email=self.cleaned_data["email"],
+            defaults={
+                "name": self.cleaned_data["name"],
+                "mobile": self.cleaned_data["mobile"],
+                "profile": self.cleaned_data.get("profile"),
+                "gender": self.cleaned_data.get("gender"),
+                "address": self.cleaned_data.get("address"),
+                "country": self.cleaned_data.get("country"),
+                "state": self.cleaned_data.get("state"),
+                "city": self.cleaned_data.get("city"),
+                "zip": self.cleaned_data.get("zip"),
+                "dob": self.cleaned_data.get("dob"),
+            },
+        )
+
+        # 🔹 Ensure that candidate is an instance of Candidate
+        if not isinstance(candidate, Candidate):
+            raise TypeError(f"Expected Candidate instance, got {type(candidate).__name__}: {candidate}")
+
+        # Ensure CandidateApplication exists
+        candidate_application, created = CandidateApplication.objects.get_or_create(
+            candidate=candidate,
+            recruitment=self.cleaned_data["recruitment"],
+            defaults={"job_position": self.cleaned_data["job_position"]},
+        )
+
+        # Update job_position if necessary
+        if not created and candidate_application.job_position != self.cleaned_data["job_position"]:
+            candidate_application.job_position = self.cleaned_data["job_position"]
+            candidate_application.save()
+
+        # Handle resume file (attach to CandidateApplication)
+        if self.cleaned_data.get("resume"):
+            Resume.objects.create(
+                file=self.cleaned_data["resume"],
+                candidate_application=candidate_application,  # Link to CandidateApplication
+                is_candidate=True,
+            )
+
+        return candidate
+
+
+
+
 
 
 

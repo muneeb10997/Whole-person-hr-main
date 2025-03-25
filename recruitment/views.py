@@ -46,7 +46,7 @@ from recruitment.forms import (
     StageNoteForm,
 )
 from recruitment.methods import recruitment_manages
-from recruitment.models import Candidate, CandidateMatchAnalysis, Recruitment, Stage, StageNote
+from recruitment.models import Candidate, CandidateApplication, CandidateMatchAnalysis, Recruitment, Stage, StageNote
 import requests
 from django.conf import settings
 import base64
@@ -1357,95 +1357,102 @@ def candidate_history(request, cand_id):
         {"history": candidate_history_queryset},
     )
 
+from django.shortcuts import render
+from django.contrib import messages
+from django.conf import settings
+from django.core.exceptions import ValidationError
+import requests
+import base64
 
-# def application_form(request):
-#     """
-#     This method renders candidate form to create candidate
-#     """
-#     form = ApplicationForm()
-#     if request.POST:
-#         form = ApplicationForm(request.POST, request.FILES)
-#         if form.is_valid():
-#             candidate_obj = form.save(commit=False)
-#             recruitment_obj = candidate_obj.recruitment_id
-#             stages = recruitment_obj.stage_set.all()
-#             if stages.filter(stage_type="applied").exists():
-#                 candidate_obj.stage_id = stages.filter(stage_type="applied").first()
-#             else:
-#                 candidate_obj.stage_id = stages.order_by("sequence").first()
-#             candidate_obj.save()
-#             messages.success(request, _("Application saved."))
-#             return render(request, "candidate/success.html")
-#         form.fields["job_position_id"].queryset = (
-#             form.instance.recruitment_id.open_positions.all()
-#         )
-#     return render(request, "candidate/application_form.html", {"form": form})
+from .forms import ApplicationForm
+from .models import CandidateApplication
 
 def application_form(request):
     """
-    This method renders candidate form to create candidate and processes resume for assessment
+    This method renders the candidate application form to create a candidate
+    and processes the resume for assessment.
     """
-    form = ApplicationForm()
-    if request.POST:
-        form = ApplicationForm(request.POST, request.FILES)
+    form = ApplicationForm(request.POST or None, request.FILES or None)
+    
+    if request.method == "POST":
         if form.is_valid():
-            # Save the candidate
+            # Debug print statements
+            print("Form is valid!")
+            
+            # Save the candidate but don't commit yet
             candidate_obj = form.save(commit=False)
-            recruitment_obj = candidate_obj.recruitment_id
+            candidate_obj.save()
+
+            #  Fetch or create CandidateApplication
+            candidate_application, created = CandidateApplication.objects.get_or_create(
+                candidate=candidate_obj,
+                defaults={
+                    "recruitment_id": form.cleaned_data["recruitment"],
+                    "job_position_id": form.cleaned_data["job_position"],
+                }
+            )
+
+            # Debug print statements
+            print(f"Candidate Application created: {created}")
+            
+            # Ensure candidate application is linked to recruitment and job position
+            candidate_application.recruitment_id = form.cleaned_data["recruitment"]
+            candidate_application.job_position_id = form.cleaned_data["job_position"]
+
+            # Assign the initial stage
+            recruitment_obj = candidate_application.recruitment_id
             stages = recruitment_obj.stage_set.all()
 
             if stages.filter(stage_type="applied").exists():
-                candidate_obj.stage_id = stages.filter(stage_type="applied").first()
+                candidate_application.stage_id = stages.filter(stage_type="applied").first()
             else:
-                candidate_obj.stage_id = stages.order_by("sequence").first()
+                candidate_application.stage_id = stages.order_by("sequence").first()
 
-            candidate_obj.save()
+            # Debug print statements
+            print(f"Stage assigned: {candidate_application.stage_id}")
+            
+            # Save CandidateApplication
+            candidate_application.save()
 
-            # Process resume through API
+            # Process resume through API if provided
             try:
-                # Read the resume file
-                resume_file = request.FILES.get('resume')  # Adjust field name as needed
-                print("here is the resume file ")
+                resume_file = request.FILES.get("resume")
                 if resume_file:
-                    # Convert file to base64
-                    resume_content = base64.b64encode(resume_file.read()).decode('utf-8')
-                    print("here is the resume content")
-                    # Prepare the API request data
+                    resume_content = base64.b64encode(resume_file.read()).decode("utf-8")
                     api_data = {
-                        'candidate_id': candidate_obj.id,
-                        'resume_content': resume_content,
-                        'file_name': resume_file.name,
-                        'file_type': resume_file.content_type
+                        "candidate_id": candidate_obj.id,
+                        "resume_content": resume_content,
+                        "file_name": resume_file.name,
+                        "file_type": resume_file.content_type,
                     }
-                    print("make calls ")
-                    # Make the API call
                     response = requests.post(
-                        f'{settings.RESUME_ASSESSMENT_API_URL}/process',  # Add this URL to your settings
+                        f"{settings.RESUME_ASSESSMENT_API_URL}/process",
                         json=api_data,
                         headers={
-                            'Authorization': f'Bearer {settings.RESUME_ASSESSMENT_API_KEY}',  # Add this key to your settings
-                            'Content-Type': 'application/json'
-                        }
+                            "Authorization": f"Bearer {settings.RESUME_ASSESSMENT_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
                     )
-                    print("response")
                     if response.status_code == 200:
-                        # You might want to save the assessment results
-                        assessment_results = response.json()
-                        # Add code here to save or process the assessment results
                         messages.success(request, _("Application saved and resume processed successfully."))
                     else:
                         messages.warning(request, _("Application saved but resume processing failed."))
 
             except Exception as e:
-                # Log the error but don't prevent the application from being saved
                 print(f"Resume processing error: {str(e)}")
                 messages.warning(request, _("Application saved but resume processing encountered an error."))
-            print("here is the registrations success")
+
             return render(request, "candidate/success.html")
-        form.fields["job_position_id"].queryset = (
-            form.instance.recruitment_id.open_positions.all()
-        )
+
+        else:
+            # Debug print statements for form errors
+            print("Form is invalid!")
+            print(form.errors)
+            
     return render(request, "candidate/application_form.html", {"form": form})
+
+
+
 
 
 @login_required
