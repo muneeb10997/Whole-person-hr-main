@@ -462,13 +462,8 @@ class CandidateApplication(HorillaModel):
             self.hired = False
             self.canceled = False
         super().save(*args, **kwargs)
-
+    
     class Meta:
-        unique_together = ("recruitment_id",)
-        permissions = (
-            ("view_history", "View Candidate History"),
-            ("archive_candidate", "Archive Candidate"),
-        )
         ordering = ["sequence"]
 
 

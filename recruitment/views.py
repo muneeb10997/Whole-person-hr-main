@@ -1477,56 +1477,20 @@ def application_form(request):
                     # Save the candidate and application
                     candidate = form.save()
                     
-                    # Process resume if provided
+                    # Handle resume if provided
                     try:
                         resume_file = request.FILES.get("resume")
                         if resume_file:
-                            file_data = b''
-                            for chunk in resume_file.chunks():
-                                file_data += chunk
-
-                            resume_content = base64.b64encode(file_data).decode('utf-8')
-                            
-                            api_data = {
-                                'candidate_id': candidate.id,
-                                'file': resume_content,
-                                'file_name': resume_file.name,
-                                'file_type': resume_file.content_type,
-                                'job_id': recruitment_id,
-                                'job_name': str(recruitment) if recruitment else ''
-                            }
-                            
-                            api_url = f'{settings.RESUME_ASSESSMENT_API_URL}process_canidate_resume'
-                            
-                            response = requests.post(
-                                api_url,
-                                json=api_data,
-                                headers={'Content-Type': 'application/json'}
+                            # Create Resume instance
+                            resume = Resume.objects.create(
+                                file=resume_file,
+                                recruitment_id=form.cleaned_data['recruitment_id'],
+                                is_candidate=True
                             )
-                            
-                            if response.status_code == 200:
-                                assessment_results = response.json()
-                                if 'redirect_url' in assessment_results:
-                                    request.session['post_success_redirect'] = assessment_results['redirect_url']
-                                
-                                messages.success(request, _("Application saved and resume processed successfully."))
-                                
-                                if resume_obj:
-                                    resume_obj.is_candidate = True
-                                    resume_obj.save()
-                                
-                                context = {
-                                    "redirect_to_login": True,
-                                    "redirect_url": assessment_results.get('redirect_url'),
-                                    "countdown_seconds": 5
-                                }
-                                return render(request, "candidate/success.html", context)
-                            else:
-                                messages.warning(request, _("Application saved but resume processing failed."))
-                    
+                            messages.success(request, _("Application and resume saved successfully."))
                     except Exception as e:
-                        logger.error(f"Resume processing error: {str(e)}")
-                        messages.warning(request, _("Application saved but resume processing encountered an error."))
+                        logger.error(f"Resume handling error: {str(e)}")
+                        messages.warning(request, _("Application saved but resume handling encountered an error."))
 
                     messages.success(request, _("Application saved successfully."))
                     return render(request, "candidate/success.html")

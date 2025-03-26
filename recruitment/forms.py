@@ -524,16 +524,18 @@ class ApplicationForm(RegistrationForm):
             recruitment_id = request.GET.get("recruitmentId")
             if recruitment_id:
                 try:
-                    recruitment = Recruitment.objects.get(
+                    recruitment = Recruitment.objects.filter(
                         id=recruitment_id, 
                         is_active=True, 
                         closed=False, 
                         is_published=True
-                    )
-                    self.fields["recruitment_id"].initial = recruitment
-                    self.fields["job_position_id"].queryset = recruitment.open_positions.all()
-                except Recruitment.DoesNotExist:
-                    pass
+                    ).first()
+                    
+                    if recruitment:
+                        self.fields["recruitment_id"].initial = recruitment
+                        self.fields["job_position_id"].queryset = recruitment.open_positions.all()
+                except Exception as e:
+                    logger.error(f"Error in recruitment query: {str(e)}")
 
     def save(self, commit=True):
         try:
