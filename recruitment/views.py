@@ -20,6 +20,7 @@ from django.contrib.auth.models import Permission
 from django.core import serializers
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
+from django.forms import ValidationError
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -45,13 +46,57 @@ from recruitment.forms import (
     StageDropDownForm,
     StageNoteForm,
 )
+from django.db import transaction
 from recruitment.methods import recruitment_manages
-from recruitment.models import Candidate, CandidateApplication, CandidateMatchAnalysis, Recruitment, Stage, StageNote
+from recruitment.models import Candidate, CandidateApplication, CandidateMatchAnalysis, Recruitment, Stage, StageNote,Resume
 import requests
 from django.conf import settings
 import base64
+import contextlib
+import json
+import logging
+import base64
+import requests
+
+from django.contrib import messages
+from django.contrib.auth.models import Permission
+from django.core import serializers
+from django.core.mail import send_mail
+from django.core.paginator import Paginator
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.shortcuts import redirect, render, get_object_or_404
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
+from django.views.decorators.http import require_http_methods
+from django.conf import settings
+
+from assessment.models import QuizAssignment
+from base.backends import ConfiguredEmailBackend
+from base.methods import sortby
+from employee.models import Employee
+from horilla.decorators import hx_request_required, login_required, permission_required
+from notifications.signals import notify
+from recruitment.decorators import manager_can_enter, recruitment_manager_can_enter
+from recruitment.filters import CandidateFilter, RecruitmentFilter, StageFilter
+from recruitment.forms import (
+    CandidateCreationForm,
+    CandidateApplicationForm,
+    ApplicationForm,
+    RecruitmentCreationForm,
+    StageCreationForm,
+    StageNoteForm,
+)
+from recruitment.models import (
+    Candidate,
+    CandidateApplication,
+    Recruitment,
+    Stage,
+    StageNote,
+    Resume
+)
 
 logger = logging.getLogger(__name__)
+
 
 
 def is_stagemanager(request, stage_id=False):
@@ -939,34 +984,88 @@ def stage_delete(request, stage_id):
 @permission_required(perm="recruitment.add_candidate")
 def candidate(request):
     """
-    This method used to create candidate
+    This method is used to create candidate with application
     """
-    form = CandidateCreationForm()
+    candidate_form = CandidateCreationForm()
+    application_form = CandidateApplicationForm()
     open_recruitment = Recruitment.objects.filter(closed=False, is_active=True)
     path = "/recruitment/candidate-view"
+
     if request.method == "POST":
-        form = CandidateCreationForm(request.POST, request.FILES)
-        if form.is_valid():
-            candidate_obj = form.save(commit=False)
-            candidate_obj.start_onboard = False
-            if candidate_obj.stage_id is None:
-                candidate_obj.stage_id = Stage.objects.filter(
-                    recruitment_id=candidate_obj.recruitment_id, stage_type="initial"
-                ).first()
-            # when creating new candidate from onboarding view
-            if request.GET.get("onboarding") == "True":
-                candidate_obj.hired = True
-                path = "/onboarding/candidates-view"
-            candidate_obj.save()
-            messages.success(request, _("Candidate added."))
-            return redirect(path)
+        candidate_form = CandidateCreationForm(request.POST, request.FILES)
+        application_form = CandidateApplicationForm(request.POST, request.FILES)
+        
+        if candidate_form.is_valid() and application_form.is_valid():
+            try:
+                # Start transaction
+                with transaction.atomic():
+                    # Save candidate first
+                    candidate = candidate_form.save()
+                    
+                    # Create application instance
+                    application = application_form.save(commit=False)
+                    application.candidate = candidate
+                    
+                    # Set initial stage if not provided
+                    if not application.stage_id:
+                        initial_stage = Stage.objects.filter(
+                            recruitment_id=application.recruitment_id,
+                            stage_type="initial"
+                        ).first()
+                        if initial_stage:
+                            application.stage_id = initial_stage
+                    
+                    # Handle onboarding case
+                    if request.GET.get("onboarding") == "True":
+                        application.hired = True
+                        path = "/onboarding/candidates-view"
+                    
+                    # Save application
+                    application.save()
+                    
+                    # Handle resume if provided
+                    if request.FILES.get('resume'):
+                        Resume.objects.create(
+                            file=request.FILES['resume'],
+                            recruitment_id=application.recruitment_id,
+                            is_candidate=True
+                        )
+                    
+                    # Notify stage managers
+                    if application.stage_id:
+                        with contextlib.suppress(Exception):
+                            managers = application.stage_id.stage_managers.select_related(
+                                "employee_user_id"
+                            )
+                            users = [employee.employee_user_id for employee in managers]
+                            notify.send(
+                                request.user.employee_get,
+                                recipient=users,
+                                verb=f"New candidate {candidate.name} arrived on stage {application.stage_id.stage}",
+                                verb_ar=f"وصل مرشح جديد {candidate.name} إلى المرحلة {application.stage_id.stage}",
+                                verb_de=f"Neuer Kandidat {candidate.name} ist auf der Stufe {application.stage_id.stage} angekommen",
+                                verb_es=f"Nuevo candidato {candidate.name} llegó a la etapa {application.stage_id.stage}",
+                                verb_fr=f"Nouveau candidat {candidate.name} arrivé à l'étape {application.stage_id.stage}",
+                                icon="person-add",
+                                redirect=reverse("pipeline"),
+                            )
+                    
+                    messages.success(request, _("Candidate added successfully."))
+                    return redirect(path)
+                    
+            except Exception as e:
+                messages.error(request, _("Failed to add candidate. Please try again."))
+                logger.error(f"Error creating candidate: {str(e)}")
 
     return render(
         request,
         "candidate/candidate_create_form.html",
-        {"form": form, "open_recruitment": open_recruitment},
+        {
+            "form": candidate_form,
+            "application_form": application_form,
+            "open_recruitment": open_recruitment
+        },
     )
-
 
 @login_required
 @permission_required(perm="recruitment.add_candidate")
@@ -990,54 +1089,27 @@ def candidate_view(request):
     """
     previous_data = request.environ["QUERY_STRING"]
     candidates = Candidate.objects.filter(is_active=True)
-    filter_obj = CandidateFilter(queryset=candidates)
-
-    SKILLS = {
-        "Programming": {
-            "Python": ["Basic Python", "OOP", "Django", "FastAPI"],
-            "JavaScript": ["ES6", "React", "Node.js", "Vue.js"],
-            "Database": ["SQL", "MongoDB", "PostgreSQL"]
-        },
-        "Soft Skills": {
-            "Communication": ["Written", "Verbal", "Presentation"],
-            "Leadership": ["Team Management", "Decision Making", "Conflict Resolution"],
-            "Problem Solving": ["Analytical Thinking", "Critical Thinking"]
-        },
-        "Domain Knowledge": {
-            "HR": ["Recruitment", "Employee Relations", "Performance Management"],
-            "Finance": ["Accounting", "Budgeting", "Financial Analysis"],
-            "Marketing": ["Digital Marketing", "Content Strategy", "Brand Management"]
-        }
-    }
-
-       # Get match scores for filtered candidates
-    match_scores = CandidateMatchAnalysis.objects.filter(
-        candidate__in=candidates
-    ).select_related('candidate')
-
-    # Create a dictionary for quick match score lookup
-    candidate_scores = {}
-    for score in match_scores:
-        candidate_scores[score.candidate_id] = {
-            'match_score': float(score.match_score),
-            'skills_match_score': float(score.skills_match_score),
-            'matched_skills': score.skills_matched
-        }
-
-
-
+    filter_obj = CandidateFilter(request.GET, queryset=candidates)
+    
+    # Get applications for each candidate
+    candidates_with_applications = []
+    for candidate in filter_obj.qs:
+        application = candidate.candidateapplication_set.first()
+        if application:
+            candidates_with_applications.append({
+                'candidate': candidate,
+                'application': application
+            })
+    
     return render(
         request,
         "candidate/candidate_view.html",
         {
-            "data": paginator_qry(filter_obj.qs, request.GET.get("page")),
+            "data": paginator_qry(candidates_with_applications, request.GET.get("page")),
             "pd": previous_data,
             "f": filter_obj,
-            "skills":SKILLS,
-            "candidate_scores":candidate_scores
         },
     )
-
 
 @login_required
 @permission_required(perm="recruitment.view_candidate")
@@ -1228,59 +1300,80 @@ def candidate_view_individual(request, cand_id):
 @manager_can_enter(perm="recruitment.change_candidate")
 def candidate_update(request, cand_id):
     """
-    Used to update or change the candidate
-    Args:
-        id : candidate_id
+    Used to update or change the candidate and their application
     """
-    candidate_obj = Candidate.objects.get(id=cand_id)
-    form = CandidateCreationForm(instance=candidate_obj)
+    candidate = get_object_or_404(Candidate, id=cand_id)
+    application = candidate.candidateapplication_set.first()
+    
+    candidate_form = CandidateCreationForm(instance=candidate)
+    application_form = CandidateApplicationForm(instance=application)
+    
     path = "/recruitment/candidate-view"
+    
     if request.method == "POST":
-        form = CandidateCreationForm(
-            request.POST, request.FILES, instance=candidate_obj
+        candidate_form = CandidateCreationForm(
+            request.POST, 
+            request.FILES, 
+            instance=candidate
         )
-        if form.is_valid():
-            candidate_obj = form.save()
-            if candidate_obj.stage_id is None:
-                candidate_obj.stage_id = Stage.objects.filter(
-                    recruitment_id=candidate_obj.recruitment_id, stage_type="initial"
+        application_form = CandidateApplicationForm(
+            request.POST,
+            request.FILES,
+            instance=application
+        )
+        
+        if candidate_form.is_valid() and application_form.is_valid():
+            candidate = candidate_form.save()
+            application = application_form.save(commit=False)
+            application.candidate = candidate
+            
+            # Set initial stage if needed
+            if not application.stage_id:
+                initial_stage = Stage.objects.filter(
+                    recruitment_id=application.recruitment_id,
+                    stage_type="initial"
                 ).first()
-            if candidate_obj.stage_id is not None:
-                if (
-                    candidate_obj.stage_id.recruitment_id
-                    != candidate_obj.recruitment_id
-                ):
-                    candidate_obj.stage_id = (
-                        candidate_obj.recruitment_id.stage_set.filter(
-                            stage_type="initial"
-                        ).first()
-                    )
+                application.stage_id = initial_stage
+            
+            # Handle stage type changes
+            if application.stage_id:
+                if application.stage_id.stage_type == "hired":
+                    application.hired = True
+                elif application.stage_id.stage_type == "cancelled":
+                    application.canceled = True
+            
+            # Handle onboarding case
             if request.GET.get("onboarding") == "True":
-                candidate_obj.hired = True
+                application.hired = True
                 path = "/onboarding/candidates-view"
-            candidate_obj.save()
+            
+            application.save()
             messages.success(request, _("Candidate Updated Successfully."))
             return redirect(path)
-    return render(request, "candidate/candidate_create_form.html", {"form": form})
-
+            
+    return render(
+        request,
+        "candidate/candidate_create_form.html",
+        {
+            "form": candidate_form,
+            "application_form": application_form
+        }
+    )
 
 @login_required
 @permission_required(perm="recruitment.delete_candidate")
-@require_http_methods(["DELETE", "POST"])
 def candidate_delete(request, cand_id):
     """
     This method is used to delete candidate permanently
-    Args:
-        id : candidate_id
     """
     try:
-        Candidate.objects.get(id=cand_id).delete()
+        candidate = Candidate.objects.get(id=cand_id)
+        candidate.delete()
         messages.success(request, _("Candidate deleted successfully."))
     except Exception as error:
         messages.error(request, error)
         messages.error(request, _("You cannot delete this candidate"))
     return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
-
 
 @login_required
 @permission_required(perm="recruitment.delete_candidate")
@@ -1357,100 +1450,109 @@ def candidate_history(request, cand_id):
         {"history": candidate_history_queryset},
     )
 
-from django.shortcuts import render
-from django.contrib import messages
-from django.conf import settings
-from django.core.exceptions import ValidationError
-import requests
-import base64
-
-from .forms import ApplicationForm
-from .models import CandidateApplication
 
 def application_form(request):
     """
-    This method renders the candidate application form to create a candidate
-    and processes the resume for assessment.
+    This method renders candidate form to create candidate
     """
-    form = ApplicationForm(request.POST or None, request.FILES or None)
-    
+    form = ApplicationForm(request=request)
+    recruitment = None
+    recruitment_id = request.GET.get("recruitmentId")
+    resume_id = request.GET.get("resumeId")
+    resume_obj = Resume.objects.filter(id=resume_id).first()
+
+    if resume_obj:
+        initial_data = {"resume": resume_obj.file.url if resume_obj else None}
+        form = ApplicationForm(initial=initial_data, request=request)
+
+    if recruitment_id is not None:
+        recruitment = Recruitment.objects.filter(id=recruitment_id).first()
+
     if request.method == "POST":
+        form = ApplicationForm(request.POST, request.FILES, request=request)
+        
         if form.is_valid():
-            # Debug print statements
-            print("Form is valid!")
-            
-            # Save the candidate but don't commit yet
-            candidate_obj = form.save(commit=False)
-            candidate_obj.save()
-
-            #  Fetch or create CandidateApplication
-            candidate_application, created = CandidateApplication.objects.get_or_create(
-                candidate=candidate_obj,
-                defaults={
-                    "recruitment_id": form.cleaned_data["recruitment"],
-                    "job_position_id": form.cleaned_data["job_position"],
-                }
-            )
-
-            # Debug print statements
-            print(f"Candidate Application created: {created}")
-            
-            # Ensure candidate application is linked to recruitment and job position
-            candidate_application.recruitment_id = form.cleaned_data["recruitment"]
-            candidate_application.job_position_id = form.cleaned_data["job_position"]
-
-            # Assign the initial stage
-            recruitment_obj = candidate_application.recruitment_id
-            stages = recruitment_obj.stage_set.all()
-
-            if stages.filter(stage_type="applied").exists():
-                candidate_application.stage_id = stages.filter(stage_type="applied").first()
-            else:
-                candidate_application.stage_id = stages.order_by("sequence").first()
-
-            # Debug print statements
-            print(f"Stage assigned: {candidate_application.stage_id}")
-            
-            # Save CandidateApplication
-            candidate_application.save()
-
-            # Process resume through API if provided
             try:
-                resume_file = request.FILES.get("resume")
-                if resume_file:
-                    resume_content = base64.b64encode(resume_file.read()).decode("utf-8")
-                    api_data = {
-                        "candidate_id": candidate_obj.id,
-                        "resume_content": resume_content,
-                        "file_name": resume_file.name,
-                        "file_type": resume_file.content_type,
-                    }
-                    response = requests.post(
-                        f"{settings.RESUME_ASSESSMENT_API_URL}/process",
-                        json=api_data,
-                        headers={
-                            "Authorization": f"Bearer {settings.RESUME_ASSESSMENT_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    if response.status_code == 200:
-                        messages.success(request, _("Application saved and resume processed successfully."))
-                    else:
-                        messages.warning(request, _("Application saved but resume processing failed."))
+                with transaction.atomic():
+                    # Save the candidate and application
+                    candidate = form.save()
+                    
+                    # Process resume if provided
+                    try:
+                        resume_file = request.FILES.get("resume")
+                        if resume_file:
+                            file_data = b''
+                            for chunk in resume_file.chunks():
+                                file_data += chunk
 
+                            resume_content = base64.b64encode(file_data).decode('utf-8')
+                            
+                            api_data = {
+                                'candidate_id': candidate.id,
+                                'file': resume_content,
+                                'file_name': resume_file.name,
+                                'file_type': resume_file.content_type,
+                                'job_id': recruitment_id,
+                                'job_name': str(recruitment) if recruitment else ''
+                            }
+                            
+                            api_url = f'{settings.RESUME_ASSESSMENT_API_URL}process_canidate_resume'
+                            
+                            response = requests.post(
+                                api_url,
+                                json=api_data,
+                                headers={'Content-Type': 'application/json'}
+                            )
+                            
+                            if response.status_code == 200:
+                                assessment_results = response.json()
+                                if 'redirect_url' in assessment_results:
+                                    request.session['post_success_redirect'] = assessment_results['redirect_url']
+                                
+                                messages.success(request, _("Application saved and resume processed successfully."))
+                                
+                                if resume_obj:
+                                    resume_obj.is_candidate = True
+                                    resume_obj.save()
+                                
+                                context = {
+                                    "redirect_to_login": True,
+                                    "redirect_url": assessment_results.get('redirect_url'),
+                                    "countdown_seconds": 5
+                                }
+                                return render(request, "candidate/success.html", context)
+                            else:
+                                messages.warning(request, _("Application saved but resume processing failed."))
+                    
+                    except Exception as e:
+                        logger.error(f"Resume processing error: {str(e)}")
+                        messages.warning(request, _("Application saved but resume processing encountered an error."))
+
+                    messages.success(request, _("Application saved successfully."))
+                    return render(request, "candidate/success.html")
+                    
+            except ValidationError as e:
+                messages.error(request, str(e))
             except Exception as e:
-                print(f"Resume processing error: {str(e)}")
-                messages.warning(request, _("Application saved but resume processing encountered an error."))
+                logger.error(f"Error in application submission: {str(e)}")
+                messages.error(request, _("Failed to submit application. Please try again."))
+        
+        # If form is invalid, update job position queryset
+        if recruitment:
+            form.fields["job_position_id"].queryset = recruitment.open_positions.all()
 
-            return render(request, "candidate/success.html")
+    return render(
+        request,
+        "candidate/application_form.html",
+        {"form": form, "recruitment": recruitment, "resume": resume_obj},
+    )
 
-        else:
-            # Debug print statements for form errors
-            print("Form is invalid!")
-            print(form.errors)
-            
-    return render(request, "candidate/application_form.html", {"form": form})
-
+def paginator_qry(qryset, page_number):
+    """
+    Helper function for pagination
+    """
+    paginator = Paginator(qryset, 50)
+    return paginator.get_page(page_number)
 
 
 

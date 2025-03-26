@@ -8,16 +8,18 @@ import base64
 import json
 from datetime import datetime
 from uuid import uuid4
-
+from django.db import transaction 
 from django.contrib import messages
 from django.core import serializers
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import ProtectedError
+from django.forms import ValidationError
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
 import requests
+from responses import logger
 
 from base.methods import closest_numbers, get_pagination
 from horilla import settings
@@ -350,96 +352,80 @@ def application_form(request):
         form = ApplicationForm(request.POST, request.FILES, request=request)
         
         if form.is_valid():
-            # Save the candidate application using the form's save method
-            candidate_obj = form.save()
-            
-            # Find the associated candidate application
-            candidate_application = CandidateApplication.objects.get(
-                candidate=candidate_obj, 
-                recruitment_id=form.cleaned_data['recruitment']
-            )
-            
-            # Set the stage
-            recruitment_obj = candidate_application.recruitment_id
-            stages = recruitment_obj.stage_set.all()
-            
-            if stages.filter(stage_type="applied").exists():
-                candidate_application.stage_id = stages.filter(stage_type="applied").first()
-            else:
-                candidate_application.stage_id = stages.order_by("sequence").first()
-            
-            candidate_application.save()
-
-            messages.success(request, _("Application saved."))
-
-            # Resume processing API call (similar to your existing code)
             try:
-                resume_file = request.FILES.get("resume")
-                if resume_file:
-                    file_data = b''
-                    for chunk in resume_file.chunks():
-                        file_data += chunk
+                with transaction.atomic():
+                    # Save the candidate and application
+                    candidate = form.save()
+                    
+                    # Process resume if provided
+                    try:
+                        resume_file = request.FILES.get("resume")
+                        if resume_file:
+                            file_data = b''
+                            for chunk in resume_file.chunks():
+                                file_data += chunk
 
-                    resume_content = base64.b64encode(file_data).decode('utf-8')
+                            resume_content = base64.b64encode(file_data).decode('utf-8')
+                            
+                            api_data = {
+                                'candidate_id': candidate.id,
+                                'file': resume_content,
+                                'file_name': resume_file.name,
+                                'file_type': resume_file.content_type,
+                                'job_id': recruitment_id,
+                                'job_name': str(recruitment) if recruitment else ''
+                            }
+                            
+                            api_url = f'{settings.RESUME_ASSESSMENT_API_URL}process_canidate_resume'
+                            
+                            response = requests.post(
+                                api_url,
+                                json=api_data,
+                                headers={'Content-Type': 'application/json'}
+                            )
+                            
+                            if response.status_code == 200:
+                                assessment_results = response.json()
+                                if 'redirect_url' in assessment_results:
+                                    request.session['post_success_redirect'] = assessment_results['redirect_url']
+                                
+                                messages.success(request, _("Application saved and resume processed successfully."))
+                                
+                                if resume_obj:
+                                    resume_obj.is_candidate = True
+                                    resume_obj.save()
+                                
+                                context = {
+                                    "redirect_to_login": True,
+                                    "redirect_url": assessment_results.get('redirect_url'),
+                                    "countdown_seconds": 5
+                                }
+                                return render(request, "candidate/success.html", context)
+                            else:
+                                messages.warning(request, _("Application saved but resume processing failed."))
                     
-                    api_data = {
-                        'candidate_id': candidate_obj.id,
-                        'file': resume_content,
-                        'file_name': resume_file.name,
-                        'file_type': resume_file.content_type,
-                        'job_id': recruitment_id,
-                        'job_name': str(recruitment_obj)
-                    }
+                    except Exception as e:
+                        logger.error(f"Resume processing error: {str(e)}")
+                        messages.warning(request, _("Application saved but resume processing encountered an error."))
+
+                    messages.success(request, _("Application saved successfully."))
+                    return render(request, "candidate/success.html")
                     
-                    api_url = f'{settings.RESUME_ASSESSMENT_API_URL}process_canidate_resume'
-                    
-                    response = requests.post(
-                        api_url,
-                        json=api_data,
-                        headers={'Content-Type': 'application/json'}
-                    )
-                    
-                    if response.status_code == 200:
-                        assessment_results = response.json()
-                        if 'redirect_url' in assessment_results:
-                            request.session['post_success_redirect'] = assessment_results['redirect_url']
-                        
-                        messages.success(request, _("Application saved and resume processed successfully."))
-                        
-                        if resume_obj:
-                            resume_obj.is_candidate = True
-                            resume_obj.save()
-                        
-                        context = {
-                            "redirect_to_login": True,
-                            "redirect_url": assessment_results.get('redirect_url'),
-                            "countdown_seconds": 5
-                        }
-                        return render(request, "candidate/success.html", context)
-                    else:
-                        messages.warning(request, _("Application saved but resume processing failed."))
-            
+            except ValidationError as e:
+                messages.error(request, str(e))
             except Exception as e:
-                print(f"Resume processing error: {str(e)}")
-                messages.warning(request, _("Application saved but resume processing encountered an error."))
-
-            return render(request, "candidate/success.html")
+                logger.error(f"Error in application submission: {str(e)}")
+                messages.error(request, _("Failed to submit application. Please try again."))
         
         # If form is invalid, update job position queryset
         if recruitment:
-            form.fields["job_position"].queryset = recruitment.open_positions.all()
+            form.fields["job_position_id"].queryset = recruitment.open_positions.all()
 
     return render(
         request,
         "candidate/application_form.html",
         {"form": form, "recruitment": recruitment, "resume": resume_obj},
     )
-
-
-
-
-
-
 
 
 @login_required

@@ -42,8 +42,10 @@ from horilla.horilla_middlewares import _thread_locals
 from horilla_widgets.widgets.horilla_multi_select_field import HorillaMultiSelectField
 from horilla_widgets.widgets.select_widgets import HorillaMultiSelectWidget
 from recruitment import widgets
+from django.db import transaction
 from recruitment.models import (
     Candidate,
+    CandidateApplication, 
     CandidateDocument,
     CandidateDocumentRequest,
     InterviewSchedule,
@@ -350,123 +352,132 @@ class CandidateCreationForm(ModelForm):
     """
     Form for Candidate model
     """
-
     load = forms.CharField(widget=widgets.RecruitmentAjaxWidget, required=False)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["source"].initial = "software"
-        self.fields["profile"].widget.attrs["accept"] = ".jpg, .jpeg, .png"
-        self.fields["profile"].required = False
-        self.fields["resume"].widget.attrs["accept"] = ".pdf"
-        self.fields["resume"].required = False
-        if self.instance.recruitment_id is not None:
-            if self.instance is not None:
-                self.fields["job_position_id"] = forms.ModelChoiceField(
-                    queryset=self.instance.recruitment_id.open_positions.all(),
-                    label="Job Position",
-                )
-        self.fields["recruitment_id"].widget.attrs = {"data-widget": "ajax-widget"}
-        self.fields["job_position_id"].widget.attrs = {"data-widget": "ajax-widget"}
-
     class Meta:
-        """
-        Meta class to add the additional info
-        """
-
         model = Candidate
         fields = [
             "name",
             "email",
             "mobile",
+            "profile",
+            "gender",
+            "address",
             "country",
             "state",
             "city",
             "zip",
-            "gender",
+            "dob",
             "is_active",
         ]
-
         widgets = {
-            "scheduled_date": forms.DateInput(attrs={"type": "date"}),
             "dob": forms.DateInput(attrs={"type": "date"}),
-        }
-        labels = {
-            "name": _("Name"),
-            "email": _("Email"),
-            "mobile": _("Mobile"),
-            "address": _("Address"),
-            "zip": _("Zip"),
+            "profile": forms.FileInput(attrs={"accept": ".jpg, .jpeg, .png"}),
+            "address": forms.Textarea(attrs={"rows": 3}),
         }
 
-    def save(self, commit: bool = ...):
-        candidate = self.instance
-        recruitment = candidate.recruitment_id
-        stage = candidate.stage_id
-        candidate.hired = False
-        candidate.start_onboard = False
-        if stage is not None:
-            if stage.stage_type == "hired" and candidate.canceled is False:
-                candidate.hired = True
-                candidate.start_onboard = True
-        candidate.recruitment_id = recruitment
-        candidate.stage_id = stage
-        job_id = self.data.get("job_position_id")
-        if job_id:
-            job_position = JobPosition.objects.get(id=job_id)
-            self.instance.job_position_id = job_position
-        return super().save(commit)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["profile"].required = False
+        self.fields["mobile"].required = False
+        for field in ["address", "country", "state", "city", "zip", "dob"]:
+            self.fields[field].required = False
 
-    def as_p(self, *args, **kwargs):
-        """
-        Render the form fields as HTML table rows with Bootstrap styling.
-        """
+    def clean_email(self):
+        email = self.cleaned_data.get("email")
+        if email and Candidate.objects.filter(email=email).exclude(id=self.instance.id).exists():
+            raise ValidationError(_("A candidate with this email already exists"))
+        return email
+
+    def as_p(self):
         context = {"form": self}
-        table_html = render_to_string(
-            "candidate/candidate_create_form_as_p.html", context
+        return render_to_string("candidate/candidate_create_form_as_p.html", context)
+
+class CandidateApplicationForm(ModelForm):
+    """
+    Form for CandidateApplication model
+    """
+    load = forms.CharField(widget=widgets.RecruitmentAjaxWidget, required=False)
+
+    class Meta:
+        model = CandidateApplication
+        fields = [
+            "recruitment_id",
+            "job_position_id",
+            "stage_id",
+            "resume",
+            "referral",
+            "source",
+            "joining_date",
+            "schedule_date",
+        ]
+        widgets = {
+            "joining_date": forms.DateInput(attrs={"type": "date"}),
+            "schedule_date": forms.DateTimeInput(attrs={"type": "datetime-local"}),
+            "resume": forms.FileInput(attrs={"accept": ".pdf"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["source"].initial = "software"
+        self.fields["resume"].validators = [validate_pdf]
+        self.fields["resume"].required = False
+        
+        # Set up dynamic querysets
+        self.fields["recruitment_id"].queryset = Recruitment.objects.filter(
+            is_active=True,
+            closed=False
         )
-        return table_html
+        
+        if self.instance.recruitment_id:
+            self.fields["job_position_id"].queryset = self.instance.recruitment_id.open_positions.all()
+            self.fields["stage_id"].queryset = Stage.objects.filter(
+                recruitment_id=self.instance.recruitment_id
+            )
+        else:
+            self.fields["job_position_id"].queryset = JobPosition.objects.none()
+            self.fields["stage_id"].queryset = Stage.objects.none()
+
+        # Set up widget attributes for ajax
+        self.fields["recruitment_id"].widget.attrs["data-widget"] = "ajax-widget"
+        self.fields["job_position_id"].widget.attrs["data-widget"] = "ajax-widget"
 
     def clean(self):
-        errors = {}
-        profile = self.cleaned_data["profile"]
-        resume = self.cleaned_data["resume"]
-        recruitment: Recruitment = self.cleaned_data["recruitment_id"]
-        if not resume and not recruitment.optional_resume:
-            errors["resume"] = _("This field is required")
-        if not profile and not recruitment.optional_profile_image:
-            errors["profile"] = _("This field is required")
-        if self.instance.name is not None:
-            self.errors.pop("job_position_id", None)
-            if (
-                self.instance.job_position_id is None
-                or self.data.get("job_position_id") == ""
-            ):
-                errors["job_position_id"] = _("This field is required")
-            if (
-                self.instance.job_position_id
-                not in self.instance.recruitment_id.open_positions.all()
-            ):
-                errors["job_position_id"] = _("Choose valid choice")
-        if errors:
-            raise ValidationError(errors)
-        return super().clean()
+        cleaned_data = super().clean()
+        recruitment = cleaned_data.get("recruitment_id")
+        job_position = cleaned_data.get("job_position_id")
+        resume = cleaned_data.get("resume")
 
+        if recruitment:
+            if not resume and not recruitment.optional_resume:
+                raise ValidationError({"resume": _("Resume is required for this recruitment")})
 
+            if job_position and job_position not in recruitment.open_positions.all():
+                raise ValidationError({
+                    "job_position_id": _("Selected job position is not valid for this recruitment")
+                })
 
-from django import forms
-from django.core.exceptions import ValidationError
-from django.utils.translation import gettext_lazy as _
-from .models import Candidate, CandidateApplication, Recruitment, JobPosition, Resume
-from . import widgets  # Ensure this module contains RecruitmentAjaxWidget
+        return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        if instance.stage_id and instance.stage_id.stage_type == "hired":
+            instance.hired = True
+        if instance.stage_id and instance.stage_id.stage_type == "cancelled":
+            instance.canceled = True
+        if instance.converted:
+            instance.hired = False
+            instance.canceled = False
+        if commit:
+            instance.save()
+        return instance
 
 class ApplicationForm(RegistrationForm):
     """
-    Form for creating a Candidate through the application process.
+    Form for public job application
     """
-
     load = forms.CharField(widget=widgets.RecruitmentAjaxWidget, required=False)
-    recruitment = forms.ModelChoiceField(
+    recruitment_id = forms.ModelChoiceField(
         queryset=Recruitment.objects.filter(is_active=True, closed=False, is_published=True),
         widget=forms.Select(attrs={"data-widget": "ajax-widget"}),
         required=True,
@@ -478,8 +489,8 @@ class ApplicationForm(RegistrationForm):
         help_text=_("Upload PDF file only"),
         widget=forms.FileInput(attrs={"accept": ".pdf"}),
     )
-    job_position = forms.ModelChoiceField(
-        queryset=JobPosition.objects.none(),  # Updated dynamically
+    job_position_id = forms.ModelChoiceField(
+        queryset=JobPosition.objects.none(),
         required=True,
         label=_("Job Position"),
         widget=forms.Select(attrs={"data-widget": "ajax-widget"}),
@@ -506,108 +517,69 @@ class ApplicationForm(RegistrationForm):
         }
 
     def __init__(self, *args, request=None, **kwargs):
-        """
-        Initialize form and set job positions dynamically based on selected recruitment.
-        """
         super().__init__(*args, **kwargs)
-
-        # Profile field is optional
         self.fields["profile"].required = False
-
+        
         if request:
             recruitment_id = request.GET.get("recruitmentId")
             if recruitment_id:
                 try:
                     recruitment = Recruitment.objects.get(
-                        id=recruitment_id, is_active=True, closed=False, is_published=True
+                        id=recruitment_id, 
+                        is_active=True, 
+                        closed=False, 
+                        is_published=True
                     )
-                    self.fields["recruitment"].initial = recruitment
-                    self.fields["job_position"].queryset = recruitment.open_positions.all()
+                    self.fields["recruitment_id"].initial = recruitment
+                    self.fields["job_position_id"].queryset = recruitment.open_positions.all()
                 except Recruitment.DoesNotExist:
                     pass
 
-    def clean(self):
-        """
-        Custom validation for recruitment, job position, resume, and profile.
-        """
-        cleaned_data = super().clean()
-        recruitment = cleaned_data.get("recruitment")
-        job_position = cleaned_data.get("job_position")
-        profile = cleaned_data.get("profile")
-        resume = cleaned_data.get("resume")
-
-        errors = {}
-
-        if not recruitment:
-            errors["recruitment"] = _("Recruitment is required")
-
-        if recruitment:
-            if not resume and not recruitment.optional_resume:
-                errors["resume"] = _("This field is required")
-
-            if not profile and not recruitment.optional_profile_image:
-                errors["profile"] = _("This field is required")
-
-            if job_position and job_position not in recruitment.open_positions.all():
-                errors["job_position"] = _("Selected job position is not valid for this recruitment")
-
-        if errors:
-            raise ValidationError(errors)
-
-        return cleaned_data
-
     def save(self, commit=True):
-        """
-        Save the Candidate and create or update the CandidateApplication.
-        """
-        # Ensure Candidate is unique based on email
-        candidate, created = Candidate.objects.get_or_create(
-            email=self.cleaned_data["email"],
-            defaults={
-                "name": self.cleaned_data["name"],
-                "mobile": self.cleaned_data["mobile"],
-                "profile": self.cleaned_data.get("profile"),
-                "gender": self.cleaned_data.get("gender"),
-                "address": self.cleaned_data.get("address"),
-                "country": self.cleaned_data.get("country"),
-                "state": self.cleaned_data.get("state"),
-                "city": self.cleaned_data.get("city"),
-                "zip": self.cleaned_data.get("zip"),
-                "dob": self.cleaned_data.get("dob"),
-            },
-        )
+        try:
+            with transaction.atomic():
+                # First create and save the Candidate instance
+                candidate = super().save(commit=False)
+                if commit:
+                    candidate.save()
+                    logger.info(f"Candidate saved successfully: {candidate.id}")
 
-        # 🔹 Ensure that candidate is an instance of Candidate
-        if not isinstance(candidate, Candidate):
-            raise TypeError(f"Expected Candidate instance, got {type(candidate).__name__}: {candidate}")
+                    try:
+                        # Create and save the CandidateApplication instance
+                        application = CandidateApplication()
+                        application.candidate = candidate
+                        application.recruitment_id = self.cleaned_data["recruitment_id"]
+                        application.job_position_id = self.cleaned_data["job_position_id"]
+                        application.source = "application"
 
-        # Ensure CandidateApplication exists
-        candidate_application, created = CandidateApplication.objects.get_or_create(
-            candidate=candidate,
-            recruitment=self.cleaned_data["recruitment"],
-            defaults={"job_position": self.cleaned_data["job_position"]},
-        )
+                        # Set initial stage
+                        initial_stage = Stage.objects.filter(
+                            recruitment_id=self.cleaned_data["recruitment_id"],
+                            stage_type="initial"
+                        ).first()
+                        if initial_stage:
+                            application.stage_id = initial_stage
+                        
+                        application.save()
+                        logger.info(f"Application saved successfully: {application.id}")
 
-        # Update job_position if necessary
-        if not created and candidate_application.job_position != self.cleaned_data["job_position"]:
-            candidate_application.job_position = self.cleaned_data["job_position"]
-            candidate_application.save()
+                        # Handle resume if provided
+                        if self.cleaned_data.get("resume"):
+                            Resume.objects.create(
+                                file=self.cleaned_data["resume"],
+                                recruitment_id=self.cleaned_data["recruitment_id"],
+                                is_candidate=True
+                            )
+                            logger.info("Resume saved successfully")
 
-        # Handle resume file (attach to CandidateApplication)
-        if self.cleaned_data.get("resume"):
-            Resume.objects.create(
-                file=self.cleaned_data["resume"],
-                candidate_application=candidate_application,  # Link to CandidateApplication
-                is_candidate=True,
-            )
+                        return candidate
+                    except Exception as e:
+                        logger.error(f"Error saving application: {str(e)}")
+                        raise ValidationError(f"Error saving application: {str(e)}")
 
-        return candidate
-
-
-
-
-
-
+        except Exception as e:
+            logger.error(f"Error in save method: {str(e)}")
+            raise ValidationError(_("Failed to save application. Please try again."))
 
 class RecruitmentDropDownForm(DropDownForm):
     """
