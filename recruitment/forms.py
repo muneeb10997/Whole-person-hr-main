@@ -554,6 +554,22 @@ class ApplicationForm(RegistrationForm):
                         application.job_position_id = self.cleaned_data["job_position_id"]
                         application.source = "application"
 
+                        # Handle resume if provided
+                        if self.cleaned_data.get("resume"):
+                            resume_file = self.cleaned_data["resume"]
+                            # Save resume directly to CandidateApplication
+                            application.resume = resume_file
+                            
+                            # Also create Resume object for additional tracking
+                            resume = Resume.objects.create(
+                                file=resume_file,
+                                recruitment_id=self.cleaned_data["recruitment_id"],
+                                is_candidate=True
+                            )
+                            # Get just the filename without the path
+                            resume_filename = resume_file.name.split('/')[-1]
+                            logger.info(f"Resume saved successfully: {resume_filename}")
+
                         # Set initial stage
                         initial_stage = Stage.objects.filter(
                             recruitment_id=self.cleaned_data["recruitment_id"],
@@ -564,15 +580,6 @@ class ApplicationForm(RegistrationForm):
                         
                         application.save()
                         logger.info(f"Application saved successfully: {application.id}")
-
-                        # Handle resume if provided
-                        if self.cleaned_data.get("resume"):
-                            Resume.objects.create(
-                                file=self.cleaned_data["resume"],
-                                recruitment_id=self.cleaned_data["recruitment_id"],
-                                is_candidate=True
-                            )
-                            logger.info("Resume saved successfully")
 
                         return candidate
                     except Exception as e:

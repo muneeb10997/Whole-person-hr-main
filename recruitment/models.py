@@ -833,8 +833,8 @@ class Resume(models.Model):
 
     def __str__(self):
         return f"{self.recruitment_id} - Resume {self.pk}"
-
-
+    
+     
 STATUS = [
     ("requested", "Requested"),
     ("approved", "Approved"),
