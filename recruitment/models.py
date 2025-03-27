@@ -195,7 +195,7 @@ class Recruitment(HorillaModel):
         This method is used to get the count of
         hired candidates
         """
-        return self.candidate.filter(hired=True).count()
+        return self.candidate_application.filter(hired=True).count()
 
     def __str__(self):
         title = (
@@ -687,10 +687,9 @@ class RecruitmentMailTemplate(HorillaModel):
 
 
 class SkillZone(HorillaModel):
-    """ "
+    """
     Model for talent pool
     """
-
     title = models.CharField(max_length=50, verbose_name="Skill Zone")
     description = models.TextField(verbose_name=_("Description"), max_length=255)
     company_id = models.ForeignKey(
@@ -703,7 +702,10 @@ class SkillZone(HorillaModel):
     objects = HorillaCompanyManager()
 
     def get_active(self):
-        return SkillZoneCandidate.objects.filter(is_active=True, skill_zone_id=self)
+        return SkillZoneCandidate.objects.filter(
+            is_active=True, 
+            skill_zone_id=self
+        )
 
     def __str__(self) -> str:
         return self.title
@@ -713,7 +715,6 @@ class SkillZoneCandidate(HorillaModel):
     """
     Model for saving candidate data's for future recruitment
     """
-
     skill_zone_id = models.ForeignKey(
         SkillZone,
         verbose_name=_("Skill Zone"),
@@ -721,32 +722,33 @@ class SkillZoneCandidate(HorillaModel):
         on_delete=models.PROTECT,
         null=True,
     )
-    candidate_id = models.ForeignKey(
+    candidate = models.ForeignKey(
         Candidate,
         on_delete=models.PROTECT,
         null=True,
         related_name="skillzonecandidate_set",
         verbose_name=_("Candidate"),
     )
-    # job_position_id=models.ForeignKey(
-    #     JobPosition,
-    #     on_delete=models.PROTECT,
-    #     null=True,
-    #     related_name="talent_pool",
-    #     verbose_name=_("Job Position")
-    # )
-
+    application = models.ForeignKey(
+        CandidateApplication,
+        on_delete=models.PROTECT,
+        null=True,
+        related_name="skillzone_applications",
+        verbose_name=_("Application")
+    )
     reason = models.CharField(max_length=200, verbose_name=_("Reason"))
     added_on = models.DateField(auto_now_add=True)
+    
     objects = HorillaCompanyManager(
-        related_company_field="candidate_id__recruitment_id__company_id"
+        related_company_field="application__recruitment_id__company_id"
     )
 
     def clean(self):
         # Check for duplicate entries in the database
         duplicate_exists = (
             SkillZoneCandidate.objects.filter(
-                candidate_id=self.candidate_id, skill_zone_id=self.skill_zone_id
+                candidate=self.candidate, 
+                skill_zone_id=self.skill_zone_id
             )
             .exclude(pk=self.pk)
             .exists()
@@ -755,15 +757,14 @@ class SkillZoneCandidate(HorillaModel):
         if duplicate_exists:
             raise ValidationError(
                 _(
-                    f"Candidate {self.candidate_id} already exists in Skill Zone {self.skill_zone_id}."
+                    f"Candidate {self.candidate} already exists in Skill Zone {self.skill_zone_id}."
                 )
             )
 
         super().clean()
 
     def __str__(self) -> str:
-        return str(self.candidate_id.get_full_name())
-
+        return str(self.candidate.get_full_name())
 
 class CandidateRating(HorillaModel):
     employee_id = models.ForeignKey(

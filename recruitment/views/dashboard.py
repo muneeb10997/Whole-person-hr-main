@@ -15,8 +15,7 @@ from base.models import Department, JobPosition
 from employee.models import EmployeeWorkInformation
 from horilla.decorators import login_required
 from recruitment.decorators import manager_can_enter
-from recruitment.models import Candidate, Recruitment, SkillZone, Stage
-
+from recruitment.models import Candidate, Recruitment, SkillZone, Stage,CandidateApplication
 
 def stage_type_candidate_count(rec, stage_type):
     """
@@ -25,7 +24,10 @@ def stage_type_candidate_count(rec, stage_type):
     candidates_count = 0
     for stage_obj in rec.stage_set.filter(stage_type=stage_type):
         candidates_count = candidates_count + len(
-            stage_obj.candidate_set.filter(is_active=True)
+            CandidateApplication.objects.filter(
+                stage_id=stage_obj,
+                is_active=True
+            )
         )
     return candidates_count
 
@@ -43,6 +45,7 @@ def dashboard(request):
         dep_vacancy = 1
     else:
         dep_vacancy = 0
+    
     employee_info = EmployeeWorkInformation.objects.all()
     joining_list = []
     for rec in employee_info:
@@ -60,36 +63,30 @@ def dashboard(request):
         all_job.append(jobpos)
 
     initial = []
-    for job in jobs:
-        ini = Candidate.objects.filter(
-            job_position_id=job, stage_id__stage_type="initial"
-        )
-        initial.append(ini.count())
-
     test = []
-    for job in jobs:
-        tes = Candidate.objects.filter(job_position_id=job, stage_id__stage_type="test")
-        test.append(tes.count())
-
     interview = []
-    for job in jobs:
-        inter = Candidate.objects.filter(
-            job_position_id=job, stage_id__stage_type="interview"
-        )
-        interview.append(inter.count())
-
     hired = []
-    for job in jobs:
-        hire = Candidate.objects.filter(
-            job_position_id=job, stage_id__stage_type="hired"
-        )
-        hired.append(hire.count())
     cancelled = []
+
     for job in jobs:
-        cancelled_candidates = Candidate.objects.filter(
-            job_position_id=job, stage_id__stage_type="cancelled"
-        )
-        cancelled.append(cancelled_candidates.count())
+        # Get applications for each job position
+        applications = CandidateApplication.objects.filter(job_position_id=job)
+        
+        # Count applications in each stage
+        ini = applications.filter(stage_id__stage_type="initial").count()
+        initial.append(ini)
+        
+        tes = applications.filter(stage_id__stage_type="test").count()
+        test.append(tes)
+        
+        inter = applications.filter(stage_id__stage_type="interview").count()
+        interview.append(inter)
+        
+        hire = applications.filter(stage_id__stage_type="hired").count()
+        hired.append(hire)
+        
+        cancelled_candidates = applications.filter(stage_id__stage_type="cancelled").count()
+        cancelled.append(cancelled_candidates)
 
     job_data = list(zip(all_job, initial, test, interview, hired, cancelled))
 
@@ -104,19 +101,16 @@ def dashboard(request):
         if stage_chart_count >= 1:
             stage_chart_count = 1
 
-    onboarding_count = Candidate.objects.filter(start_onboard=True)
-    onboarding_count = onboarding_count.count()
+    # Get candidates in onboarding
+    onboarding_count = CandidateApplication.objects.filter(start_onboard=True).count()
 
     recruitment_manager_mapping = {}
-
     for rec in recruitment_obj:
         recruitment_title = rec.title
         managers = []
-
         for manager in rec.recruitment_managers.all():
             name = manager.get_full_name()
             managers.append(name)
-
         recruitment_manager_mapping[recruitment_title] = managers
 
     total_vacancy = 0
@@ -126,13 +120,16 @@ def dashboard(request):
         else:
             total_vacancy += openings.vacancy
 
-    hired_candidates = candidates.filter(hired=True)
-    total_candidates = len(candidates)
-    total_hired_candidates = len(hired_candidates)
+    # Get hired candidates from applications
+    hired_applications = CandidateApplication.objects.filter(hired=True)
+    total_candidates = CandidateApplication.objects.count()
+    total_hired_candidates = hired_applications.count()
+    
     conversion_ratio = 0
     hired_ratio = 0
     total_candidate_ratio = 0
     acceptance_ratio = 0
+    
     if total_candidates != 0:
         conversion_ratio = f"{((total_hired_candidates / total_candidates) * 100):.1f}"
     if total_vacancy != 0:
@@ -142,6 +139,7 @@ def dashboard(request):
         acceptance_ratio = f"{((onboarding_count / total_hired_candidates) * 100):.1f}"
 
     skill_zone = SkillZone.objects.filter(is_active=True)
+    
     return render(
         request,
         "dashboard/dashboard.html",
@@ -151,7 +149,7 @@ def dashboard(request):
             "total_hired_candidates": total_hired_candidates,
             "conversion_ratio": conversion_ratio,
             "acceptance_ratio": acceptance_ratio,
-            "onboard_candidates": hired_candidates.filter(start_onboard=True),
+            "onboard_candidates": hired_applications.filter(start_onboard=True),
             "job_data": job_data,
             "total_vacancy": total_vacancy,
             "recruitment_manager_mapping": recruitment_manager_mapping,

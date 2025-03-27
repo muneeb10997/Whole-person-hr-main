@@ -2640,55 +2640,33 @@ def create_candidate_rating(request, cand_id):
 
 
 @login_required
-@manager_can_enter(perm="recruitment.view_skillzone")
+@permission_required("recruitment.view_skillzone")
 def skill_zone_view(request):
     """
-    This method is used to show Skill zone view
+    This method renders skill zone view template
     """
-    candidates = SkillZoneCandFilter(request.GET).qs.filter(is_active=True)
-    skill_groups = group_by_queryset(
-        candidates,
-        "skill_zone_id",
-        request.GET.get("page"),
-        "page",
-    )
-
-    all_zones = []
-    for zone in skill_groups:
-        all_zones.append(zone["grouper"])
-
-    skill_zone_filtered = SkillZoneFilter(request.GET).qs.filter(is_active=True)
-    all_zone_objects = list(skill_zone_filtered)
-    unused_skill_zones = list(set(all_zone_objects) - set(all_zones))
-
-    unused_zones = []
-    for zone in unused_skill_zones:
-        unused_zones.append(
-            {
-                "grouper": zone,
-                "list": [],
-                "dynamic_name": "",
-            }
+    skill_zones = SkillZone.objects.filter(is_active=True)
+    
+    # Initialize the filter with request.GET
+    filter_instance = SkillZoneCandFilter(
+        request.GET,
+        queryset=SkillZoneCandidate.objects.filter(is_active=True).select_related(
+            'candidate',
+            'skill_zone_id',
+            'application',
+            'application__recruitment_id'
         )
-    skill_groups = skill_groups.object_list + unused_zones
-    skill_groups = paginator_qry(skill_groups, request.GET.get("page"))
-    previous_data = request.GET.urlencode()
-    data_dict = parse_qs(previous_data)
-    get_key_instances(SkillZone, data_dict)
-    if skill_groups.object_list:
-        template = "skill_zone/skill_zone_view.html"
-    else:
-        template = "skill_zone/empty_skill_zone.html"
-
+    )
+    
+    candidates = filter_instance.qs
+    
     context = {
-        "skill_zones": skill_groups,
-        "page": request.GET.get("page"),
-        "pd": previous_data,
-        "f": SkillZoneCandFilter(),
-        "filter_dict": data_dict,
+        "skill_zones": skill_zones,
+        "candidates": candidates,
+        "filter_form": filter_instance.form,
     }
-    return render(request, template, context=context)
-
+    
+    return render(request, "skill_zone/skill_zone_view.html", context)
 
 @login_required
 @hx_request_required
