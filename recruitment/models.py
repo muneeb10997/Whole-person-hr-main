@@ -385,6 +385,13 @@ class CandidateApplication(HorillaModel):
         related_name="candidate_application",
         verbose_name=_("Recruitment"),
     )
+    candidate_id = models.ForeignKey(
+        Candidate,
+        on_delete=models.CASCADE,  # or models.PROTECT based on your requirements
+        null=True,
+        related_name="applications",
+        verbose_name=_("Candidate"),
+    )
     job_position_id = models.ForeignKey(
         JobPosition,
         on_delete=models.PROTECT,

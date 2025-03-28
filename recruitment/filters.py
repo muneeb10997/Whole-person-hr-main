@@ -127,6 +127,7 @@ class CandidateApplicationFilter(FilterSet):
     class Meta:
         model = CandidateApplication
         fields = [
+            "candidate_id",
             "recruitment",
             "recruitment_id",
             "stage_id",
