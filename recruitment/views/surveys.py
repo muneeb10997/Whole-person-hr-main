@@ -347,7 +347,7 @@ def application_form(request):
 
     if recruitment_id is not None:
         recruitment = Recruitment.objects.filter(id=recruitment_id).first()
-
+        
     if request.method == "POST":
         form = ApplicationForm(request.POST, request.FILES, request=request)
         
@@ -356,7 +356,10 @@ def application_form(request):
                 with transaction.atomic():
                     # Save the candidate and application
                     candidate = form.save()
-                    
+                    candidate_application = CandidateApplication.objects.create(
+                        candidate_id=candidate,
+                        recruitment_id=recruitment,
+                    )
                     # Handle resume if provided
                     try:
                         resume_file = request.FILES.get("resume")

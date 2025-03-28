@@ -1476,7 +1476,10 @@ def application_form(request):
                 with transaction.atomic():
                     # Save the candidate and application
                     candidate = form.save()
-                    
+
+                    candidate_application = CandidateApplication.objects.create(
+                    candidate_id=candidate,
+                    recruitment_id=recruitment,)
                     # Handle resume if provided
                     try:
                         resume_file = request.FILES.get("resume")
